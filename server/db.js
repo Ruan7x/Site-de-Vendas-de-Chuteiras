@@ -32,10 +32,9 @@ CREATE TABLE IF NOT EXISTS orders (
   status              TEXT NOT NULL,          -- CREATED|AWAITING_PAYMENT|IN_ANALYSIS|PAID|DECLINED|CANCELED|EXPIRED|ERROR|VERIFICATION_ERROR
   total_cents         INTEGER NOT NULL,       -- calculado no servidor
   items_json          TEXT NOT NULL,          -- snapshot: [{productId,name,size,quantity,unitCents}]
-  pagbank_checkout_id TEXT,
-  pagbank_pay_url     TEXT,
-  pagbank_order_id    TEXT,
-  pagbank_charge_id   TEXT,
+  provider_checkout_id TEXT,                  -- id da preferência (Mercado Pago)
+  provider_pay_url    TEXT,                   -- link de pagamento (init_point)
+  provider_payment_id TEXT,                   -- id do pagamento aprovado/mais recente
   checkout_expires_at TEXT,
   last_error          TEXT,
   last_checked_at     INTEGER NOT NULL DEFAULT 0,
@@ -43,7 +42,6 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at          TEXT NOT NULL,
   updated_at          TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_orders_pb_order ON orders(pagbank_order_id);
 
 -- Dedupe de notificações: o mesmo evento nunca é processado duas vezes.
 CREATE TABLE IF NOT EXISTS payment_events (
@@ -61,6 +59,8 @@ CREATE TABLE IF NOT EXISTS feedback (
   comment    TEXT NOT NULL,
   name       TEXT,
   email      TEXT,
+  model      TEXT,                            -- modelo de chuteira comprado
+  images     TEXT NOT NULL DEFAULT '[]',      -- JSON: nomes dos arquivos enviados
   ip_hash    TEXT,
   created_at TEXT NOT NULL
 );
@@ -72,8 +72,30 @@ export function openDb(file) {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  migrate(db);
   seedProductsOnce(db);
   return db;
+}
+
+const columns = (db, table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+
+/** Atualiza bancos criados por versões anteriores (PagBank) sem perder dados. */
+function migrate(db) {
+  const orderCols = columns(db, "orders");
+  const renames = [
+    ["pagbank_checkout_id", "provider_checkout_id"],
+    ["pagbank_pay_url", "provider_pay_url"],
+    ["pagbank_order_id", "provider_payment_id"],
+  ];
+  for (const [from, to] of renames) {
+    if (orderCols.includes(from) && !orderCols.includes(to)) db.exec(`ALTER TABLE orders RENAME COLUMN ${from} TO ${to}`);
+  }
+  db.exec("DROP INDEX IF EXISTS idx_orders_pb_order");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_orders_payment ON orders(provider_payment_id)");
+
+  const fbCols = columns(db, "feedback");
+  if (!fbCols.includes("model")) db.exec("ALTER TABLE feedback ADD COLUMN model TEXT");
+  if (!fbCols.includes("images")) db.exec("ALTER TABLE feedback ADD COLUMN images TEXT NOT NULL DEFAULT '[]'");
 }
 
 function seedProductsOnce(db) {

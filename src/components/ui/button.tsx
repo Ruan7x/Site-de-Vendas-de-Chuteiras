@@ -5,7 +5,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-200 active:translate-y-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -16,9 +16,9 @@ const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
-        volt: "bg-primary text-primary-foreground font-display tracking-wide uppercase rounded-none shadow-[var(--shadow-volt)] hover:bg-primary/85",
+        volt: "bg-primary text-primary-foreground font-display tracking-wide uppercase rounded-none shadow-[var(--shadow-volt)] hover:bg-primary/85 hover:shadow-[0_0_0_1px_var(--primary),0_16px_36px_-12px_oklch(0.88_0.24_128/0.6)]",
         onDark:
-          "border border-border bg-transparent text-foreground font-display tracking-wide uppercase rounded-none hover:bg-secondary",
+          "border border-border bg-transparent text-foreground font-display tracking-wide uppercase rounded-none hover:border-primary hover:text-primary",
         flame:
           "bg-accent text-accent-foreground font-display tracking-wide uppercase rounded-none hover:bg-accent/85",
       },

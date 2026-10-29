@@ -14,7 +14,7 @@ function randomKey() {
 /**
  * Cria o pedido no servidor a partir do carrinho existente. Enviamos apenas produto/tamanho/quantidade:
  * preços e total são SEMPRE recalculados no servidor. A chave de idempotência evita pedidos duplicados
- * (duplo clique, recarregar a página, voltar do PagBank e clicar de novo com o mesmo carrinho).
+ * (duplo clique, recarregar a página, voltar do Mercado Pago e clicar de novo com o mesmo carrinho).
  */
 export async function startCheckout(lines: Line[]): Promise<CheckoutResult> {
   const items = lines.map((l) => ({ productId: l.id, size: l.size, quantity: l.qty }));

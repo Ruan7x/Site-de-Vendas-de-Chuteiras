@@ -1,24 +1,56 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { CheckCircle2, Loader2, Star } from "lucide-react";
+import { CheckCircle2, ImagePlus, Loader2, Star, X } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { useProducts } from "@/lib/products-store";
+
+const MAX_IMAGES = 3;
+const OTHER = "__outro__";
+
+/** Reduz a foto no navegador (até 1280 px, JPEG) para o envio ser leve. */
+async function compressImage(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Não foi possível ler essa imagem."));
+      el.src = url;
+    });
+    const scale = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Seu navegador não conseguiu processar a imagem.");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.82);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 const schema = z.object({
   rating: z.number({ message: "Escolha uma nota de 1 a 5 estrelas." }).int().min(1, "Escolha uma nota de 1 a 5 estrelas.").max(5),
   comment: z.string().trim().min(5, "Escreva pelo menos 5 caracteres.").max(1000, "Máximo de 1000 caracteres."),
   name: z.string().trim().max(80, "Máximo de 80 caracteres.").optional(),
+  model: z.string().trim().max(100, "Máximo de 100 caracteres.").optional(),
   email: z.union([z.literal(""), z.string().trim().max(120).email("Informe um e-mail válido.")]).optional(),
 });
 
 const LABELS = ["", "Ruim", "Regular", "Bom", "Muito bom", "Excelente"];
-type Errors = Partial<Record<"rating" | "comment" | "name" | "email" | "form", string>>;
+type Errors = Partial<Record<"rating" | "comment" | "name" | "email" | "model" | "images" | "form", string>>;
 
 export function FeedbackSection() {
   const mountedAt = useRef(0);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { products } = useProducts();
 
   useEffect(() => {
     mountedAt.current = Date.now();
@@ -31,16 +63,41 @@ export function FeedbackSection() {
   const [email, setEmail] = useState("");
   const [comment, setComment] = useState("");
   const [website, setWebsite] = useState(""); // honeypot: humanos não preenchem
+  const [modelChoice, setModelChoice] = useState("");
+  const [modelOther, setModelOther] = useState("");
+  const [images, setImages] = useState<string[]>([]);
   const [errors, setErrors] = useState<Errors>({});
   const [sending, setSending] = useState(false);
   const [done, setDone] = useState(false);
 
   const active = hover || rating;
 
+  const addFiles = async (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    const room = MAX_IMAGES - images.length;
+    const files = Array.from(list).slice(0, Math.max(0, room));
+    if (list.length > room) setErrors((p) => ({ ...p, images: `Você pode enviar até ${MAX_IMAGES} fotos.` }));
+    else setErrors((p) => ({ ...p, images: undefined }));
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) {
+        setErrors((p) => ({ ...p, images: "Envie apenas arquivos de imagem." }));
+        continue;
+      }
+      try {
+        const data = await compressImage(f);
+        setImages((prev) => (prev.length < MAX_IMAGES ? [...prev, data] : prev));
+      } catch (err) {
+        setErrors((p) => ({ ...p, images: err instanceof Error ? err.message : "Imagem inválida." }));
+      }
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (sending) return;
-    const parsed = schema.safeParse({ rating: rating || undefined, comment, name, email });
+    const model = modelChoice === OTHER ? modelOther : modelChoice;
+    const parsed = schema.safeParse({ rating: rating || undefined, comment, name, email, model });
     if (!parsed.success) {
       const next: Errors = {};
       for (const i of parsed.error.issues) next[i.path[0] as keyof Errors] ??= i.message;
@@ -52,13 +109,16 @@ export function FeedbackSection() {
     try {
       await api("/api/feedback", {
         method: "POST",
-        json: { ...parsed.data, website, elapsedMs: Date.now() - mountedAt.current },
+        json: { ...parsed.data, images, website, elapsedMs: Date.now() - mountedAt.current },
       });
       setRating(0);
       setHover(0);
       setName("");
       setEmail("");
       setComment("");
+      setModelChoice("");
+      setModelOther("");
+      setImages([]);
       setDone(true);
       mountedAt.current = Date.now();
     } catch (err) {
@@ -111,6 +171,71 @@ export function FeedbackSection() {
               <Input id="fb-email" type="email" value={email} maxLength={120} autoComplete="email" onChange={(e) => setEmail(e.target.value)} placeholder="voce@email.com" />
               {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
             </div>
+          </div>
+
+          <div className="mt-6 grid gap-5 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="fb-model">Modelo que você comprou (opcional)</Label>
+              <select
+                id="fb-model"
+                value={modelChoice}
+                onChange={(e) => setModelChoice(e.target.value)}
+                className="h-10 w-full border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                <option value="">Selecione…</option>
+                {products.map((p) => (
+                  <option key={p.id} value={`${p.name} – ${p.colorway}`}>
+                    {p.name} – {p.colorway}
+                  </option>
+                ))}
+                <option value={OTHER}>Outro modelo</option>
+              </select>
+              {errors.model && <p className="text-xs text-destructive">{errors.model}</p>}
+            </div>
+            {modelChoice === OTHER && (
+              <div className="space-y-1.5">
+                <Label htmlFor="fb-model-other">Qual modelo?</Label>
+                <Input id="fb-model-other" value={modelOther} maxLength={100} onChange={(e) => setModelOther(e.target.value)} placeholder="Ex.: Nike Mercurial Vapor" />
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6">
+            <Label>Fotos da chuteira (opcional, até {MAX_IMAGES})</Label>
+            <div className="mt-2 flex flex-wrap gap-3">
+              {images.map((src, i) => (
+                <div key={i} className="group relative size-24 border border-border">
+                  <img src={src} alt={`Foto ${i + 1} enviada`} className="size-full object-cover" />
+                  <button
+                    type="button"
+                    aria-label={`Remover foto ${i + 1}`}
+                    onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
+                    className="absolute -right-2 -top-2 flex size-6 items-center justify-center bg-destructive text-destructive-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+              {images.length < MAX_IMAGES && (
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="flex size-24 flex-col items-center justify-center gap-1 border border-dashed border-input text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                >
+                  <ImagePlus className="size-5" />
+                  Adicionar
+                </button>
+              )}
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              className="hidden"
+              onChange={(e) => void addFiles(e.target.files)}
+            />
+            {errors.images && <p className="mt-1 text-xs text-destructive">{errors.images}</p>}
           </div>
 
           <div className="mt-6">

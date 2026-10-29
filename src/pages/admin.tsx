@@ -332,13 +332,13 @@ function productToForm(p: Product): FormState {
 
 const STATUS_LABEL: Record<string, string> = {
   CREATED: "Criado", AWAITING_PAYMENT: "Aguardando pagamento", IN_ANALYSIS: "Em análise", PAID: "Pago",
-  DECLINED: "Recusado", CANCELED: "Cancelado", EXPIRED: "Expirado", ERROR: "Erro no checkout",
+  DECLINED: "Recusado", CANCELED: "Cancelado", EXPIRED: "Expirado", REFUNDED: "Reembolsado", ERROR: "Erro no checkout",
   VERIFICATION_ERROR: "Divergência — verificar",
 };
 
 type AdminOrder = {
   number: string; status: string; total: number; createdAt: string; paidAt: string | null;
-  items: { name: string; size: number; quantity: number }[]; pagbankOrderId: string | null; lastError: string | null;
+  items: { name: string; size: number; quantity: number }[]; paymentId: string | null; lastError: string | null;
 };
 
 function AdminOrders() {
@@ -384,7 +384,16 @@ function AdminOrders() {
   );
 }
 
-type AdminFeedbackRow = { id: number; rating: number; comment: string; name: string | null; email: string | null; createdAt: string };
+type AdminFeedbackRow = {
+  id: number;
+  rating: number;
+  comment: string;
+  name: string | null;
+  email: string | null;
+  model: string | null;
+  images: string[];
+  createdAt: string;
+};
 
 function AdminFeedback() {
   const [rows, setRows] = useState<AdminFeedbackRow[] | null>(null);
@@ -409,7 +418,19 @@ function AdminFeedback() {
             </span>
             <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleString("pt-BR")}</span>
           </div>
+          {r.model && (
+            <p className="mt-2 text-xs font-semibold uppercase tracking-wider text-primary">Modelo: {r.model}</p>
+          )}
           <p className="mt-2 whitespace-pre-wrap text-sm">{r.comment}</p>
+          {r.images?.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {r.images.map((src) => (
+                <a key={src} href={src} target="_blank" rel="noreferrer">
+                  <img src={src} alt="Foto enviada pelo cliente" loading="lazy" className="size-24 border border-border object-cover" />
+                </a>
+              ))}
+            </div>
+          )}
           {(r.name || r.email) && (
             <p className="mt-2 text-xs text-muted-foreground">{[r.name, r.email].filter(Boolean).join(" · ")}</p>
           )}

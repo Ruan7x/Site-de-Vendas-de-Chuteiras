@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Clock, Loader2, MessageCircle, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,19 +26,19 @@ type Tone = "success" | "pending" | "danger";
 const UI: Record<string, { title: string; text: string; tone: Tone; icon: typeof Clock }> = {
   AWAITING_PAYMENT: {
     title: "Aguardando pagamento",
-    text: "Ainda não recebemos a confirmação do PagBank. Se você já pagou, aguarde alguns instantes — esta página atualiza sozinha. Pix e boleto podem levar mais tempo.",
+    text: "Ainda não recebemos a confirmação do Mercado Pago. Se você já pagou, aguarde alguns instantes — esta página atualiza sozinha. Pix e boleto podem levar mais tempo.",
     tone: "pending",
     icon: Clock,
   },
   IN_ANALYSIS: {
     title: "Pagamento em análise",
-    text: "O PagBank está analisando a transação. Assim que for aprovada, liberamos o contato com a loja.",
+    text: "O Mercado Pago está analisando a transação. Assim que for aprovada, liberamos o contato com a loja.",
     tone: "pending",
     icon: Clock,
   },
   PAID: {
     title: "Pagamento aprovado",
-    text: "Pagamento confirmado pelo PagBank. Continue o atendimento pelo WhatsApp para combinar a entrega.",
+    text: "Pagamento confirmado pelo Mercado Pago. Continue o atendimento pelo WhatsApp para combinar a entrega.",
     tone: "success",
     icon: CheckCircle2,
   },
@@ -59,6 +59,12 @@ const UI: Record<string, { title: string; text: string; tone: Tone; icon: typeof
     text: "O tempo para pagar este pedido acabou. Gere um novo link de pagamento e conclua a compra.",
     tone: "danger",
     icon: XCircle,
+  },
+  REFUNDED: {
+    title: "Pagamento reembolsado",
+    text: "Este pagamento foi devolvido ou contestado. Se tiver dúvidas, fale com a loja informando o número do pedido.",
+    tone: "danger",
+    icon: AlertTriangle,
   },
   ERROR: {
     title: "Erro ao iniciar o pagamento",
@@ -82,6 +88,9 @@ const toneClass: Record<Tone, string> = {
 
 export default function OrderPage() {
   const { publicId = "" } = useParams<{ publicId: string }>();
+  const [searchParams] = useSearchParams();
+  // O Mercado Pago anexa o id do pagamento à URL de retorno. É só uma dica: o servidor confere na API.
+  const paymentHint = searchParams.get("payment_id") ?? searchParams.get("collection_id") ?? "";
   const { clear } = useCart();
   const [order, setOrder] = useState<OrderView | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -94,13 +103,14 @@ export default function OrderPage() {
 
   const load = useCallback(async () => {
     try {
-      setOrder(await api<OrderView>(`/api/orders/${encodeURIComponent(publicId)}`));
+      const qs = /^\d{3,20}$/.test(paymentHint) ? `?payment_id=${paymentHint}` : "";
+      setOrder(await api<OrderView>(`/api/orders/${encodeURIComponent(publicId)}${qs}`));
       setLoadError(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) setNotFound(true);
       else setLoadError(e instanceof Error ? e.message : "Erro ao verificar o pagamento.");
     }
-  }, [publicId]);
+  }, [publicId, paymentHint]);
 
   useEffect(() => {
     void load();
@@ -212,7 +222,7 @@ export default function OrderPage() {
         <p className="mt-3 text-sm text-muted-foreground">{ui.text}</p>
         {order.verification === "error" && (
           <p className="mt-3 text-sm text-destructive">
-            Não conseguimos consultar o PagBank agora. Tentaremos de novo automaticamente.
+            Não conseguimos consultar o Mercado Pago agora. Tentaremos de novo automaticamente.
           </p>
         )}
         {loadError && <p className="mt-3 text-sm text-destructive">{loadError}</p>}

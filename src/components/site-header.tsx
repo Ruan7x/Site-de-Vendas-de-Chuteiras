@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Loader2, Menu, Settings, ShoppingBag, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useState } from "react";
@@ -27,7 +27,7 @@ function CartSheet() {
     try {
       const res = await startCheckout(detailed.map((l) => ({ id: l.product.id, size: l.size, qty: l.qty })));
       if (res.payUrl) {
-        window.location.assign(res.payUrl); // página segura de pagamento do PagBank
+        window.location.assign(res.payUrl); // página segura de pagamento do Mercado Pago
         return;
       }
       setOpen(false);
@@ -127,12 +127,19 @@ function CartSheet() {
 
 export function SiteHeader() {
   const [open, setOpen] = useState(false);
+  const { pathname, search } = useLocation();
+  const activeCat = new URLSearchParams(search).get("cat");
+
+  const linkClass = (active: boolean) =>
+    `text-sm font-semibold uppercase tracking-[0.14em] transition-colors hover:text-primary ${
+      active ? "text-primary" : "text-muted-foreground"
+    }`;
 
   const nav = (
     <>
       <Link
         to="/produtos"
-        className="eyebrow text-muted-foreground transition-colors hover:text-primary"
+        className={linkClass(pathname === "/produtos" && !activeCat)}
         onClick={() => setOpen(false)}
       >
         Todas
@@ -141,7 +148,7 @@ export function SiteHeader() {
         <Link
           key={cat}
           to={`/produtos?cat=${encodeURIComponent(cat)}`}
-          className="eyebrow text-muted-foreground transition-colors hover:text-primary"
+          className={linkClass(pathname === "/produtos" && activeCat === cat)}
           onClick={() => setOpen(false)}
         >
           {cat}
@@ -151,16 +158,16 @@ export function SiteHeader() {
   );
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
+    <header className="sticky top-0 z-50 border-b border-border bg-background/95">
+      <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
         <Link to="/" className="flex items-center gap-2">
-          <span className="skew-tag bg-primary px-2 py-0.5 font-display text-xl text-primary-foreground">
+          <span className="skew-tag bg-primary px-2.5 py-0.5 font-display text-2xl text-primary-foreground">
             TN
           </span>
-          <span className="font-display text-xl tracking-wider">Sports</span>
+          <span className="font-display text-2xl tracking-wider">Sports</span>
         </Link>
 
-        <nav className="hidden items-center gap-8 md:flex">{nav}</nav>
+        <nav className="hidden items-center gap-10 md:flex">{nav}</nav>
 
         <div className="flex items-center gap-1">
           <Button asChild variant="ghost" size="icon" aria-label="Área administrativa">

@@ -4,8 +4,8 @@ import express from "express";
 import { z, ZodError } from "zod";
 import { productToApi } from "./db.js";
 import { HttpError, createOrdersService } from "./orders.js";
-import { createPagBankClient } from "./pagbank.js";
-import { saveDataUrlImage } from "./uploads.js";
+import { createMercadoPagoClient } from "./mercadopago.js";
+import { IMAGE_NAME_RE, decodeDataUrlImage, saveDataUrlImage, writeImage } from "./uploads.js";
 import {
   PUBLIC_ID_RE, createRateLimiter, parseCookies, safeEqual, sha256Hex, signSession, verifySession,
 } from "./security.js";
@@ -35,6 +35,8 @@ const feedbackSchema = z.object({
   comment: z.string().trim().min(5).max(1000),
   name: z.string().trim().max(80).optional(),
   email: z.union([z.literal(""), z.string().trim().max(120).email()]).optional(),
+  model: z.string().trim().max(100).optional(),
+  images: z.array(z.string().max(4_500_000)).max(3).optional(),
   website: z.string().max(200).optional(), // honeypot
   elapsedMs: z.number().int().min(0).optional(),
 });
@@ -44,11 +46,11 @@ const slugify = (v) =>
   v.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "").slice(0, 60);
 const validImageRef = (s) => (s.startsWith("/") && !s.startsWith("//")) || /^https:\/\//.test(s);
 
-export function createApp({ db, config, pagbank, log = console }) {
+export function createApp({ db, config, mp, log = console }) {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", config.trustProxy);
-  const orders = createOrdersService({ db, config, pagbank, log });
+  const orders = createOrdersService({ db, config, mp, log });
 
   app.use((req, res, next) => {
     res.set({ "X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin", "X-Frame-Options": "DENY" });
@@ -62,13 +64,39 @@ export function createApp({ db, config, pagbank, log = console }) {
     feedbackAttempts: limit(3600_000, 60), feedbackStored: limit(3600_000, 5), feedbackGlobal: limit(3600_000, 200, () => "all"),
   };
 
-  // ---------- webhook PagBank (corpo BRUTO: a assinatura depende dos bytes exatos) ----------
-  app.post("/api/webhooks/pagbank", rl.webhook, express.raw({ type: () => true, limit: "200kb" }), async (req, res, next) => {
+  // ---------- webhook Mercado Pago ----------
+  app.post("/api/webhooks/mercadopago", rl.webhook, express.raw({ type: () => true, limit: "200kb" }), async (req, res, next) => {
     try {
       const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
-      const out = await orders.handleWebhook(raw, req.headers);
+      const out = await orders.handleWebhook(raw, req.headers, req.query);
       res.status(out.code).json(out.body);
     } catch (e) { next(e); }
+  });
+
+  // ---------- feedback (antes do parser global: aceita fotos em base64, até 3 de 2,5 MB) ----------
+  app.post("/api/feedback", rl.feedbackAttempts, express.json({ limit: "12mb" }), (req, res) => {
+    const d = feedbackSchema.parse(req.body);
+    if (d.website) return res.status(201).json({ ok: true }); // bot: finge sucesso, não grava
+    if (d.elapsedMs !== undefined && d.elapsedMs < 1500)
+      throw new HttpError(429, "too_fast", "Envio rápido demais. Revise o formulário e tente novamente.");
+    // Valida todas as fotos ANTES de gastar cota ou gravar qualquer arquivo.
+    const decoded = (d.images ?? []).map((img) => decodeDataUrlImage(img, 2.5 * 1024 * 1024));
+    // Limites por IP (5/h) e globais (200/h) contam apenas envios válidos.
+    const wait = rl.feedbackStored.consume(req.ip) || rl.feedbackGlobal.consume("all");
+    if (wait) throw new HttpError(429, "rate_limited", "Você já enviou várias avaliações. Tente novamente mais tarde.");
+    const ipHash = sha256Hex(`${req.ip}|${config.sessionSecret}`).slice(0, 32);
+    const comment = clean(d.comment);
+    const dup = db
+      .prepare("SELECT 1 FROM feedback WHERE ip_hash=? AND comment=? AND created_at > ?")
+      .get(ipHash, comment, new Date(Date.now() - 86_400_000).toISOString());
+    if (!dup) {
+      const names = decoded.map((img) => writeImage(img, config.feedbackDir));
+      db.prepare("INSERT INTO feedback (rating,comment,name,email,model,images,ip_hash,created_at) VALUES (?,?,?,?,?,?,?,?)").run(
+        d.rating, comment, clean(d.name) || null, clean(d.email) || null, clean(d.model) || null,
+        JSON.stringify(names), ipHash, new Date().toISOString(),
+      );
+    }
+    res.status(201).json({ ok: true });
   });
 
   // ---------- admin (sessão assinada em cookie HttpOnly) ----------
@@ -148,17 +176,31 @@ export function createApp({ db, config, pagbank, log = console }) {
     res.json({ ok: true });
   });
   admin.get("/orders", (req, res) => res.json({ orders: orders.listOrders() }));
-  admin.get("/feedback", (req, res) =>
+  admin.get("/feedback", (req, res) => {
+    const rows = db
+      .prepare("SELECT id,rating,comment,name,email,model,images,created_at AS createdAt FROM feedback ORDER BY id DESC LIMIT 500")
+      .all();
     res.json({
-      feedback: db.prepare("SELECT id,rating,comment,name,email,created_at AS createdAt FROM feedback ORDER BY id DESC LIMIT 500").all(),
-    }),
-  );
+      feedback: rows.map(({ images, ...r }) => ({
+        ...r,
+        images: JSON.parse(images || "[]").map((n) => `/api/admin/feedback-images/${n}`),
+      })),
+    });
+  });
+  // Fotos dos clientes: só o admin autenticado vê (nome validado contra path traversal).
+  admin.get("/feedback-images/:name", (req, res) => {
+    if (!IMAGE_NAME_RE.test(req.params.name)) throw new HttpError(404, "not_found", "Imagem não encontrada.");
+    res.set({ "Cache-Control": "private, max-age=3600", "Content-Security-Policy": "default-src 'none'; sandbox" });
+    res.sendFile(req.params.name, { root: config.feedbackDir, dotfiles: "deny" }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: "not_found", message: "Imagem não encontrada." });
+    });
+  });
   app.use("/api/admin", admin);
 
   // ---------- público ----------
   app.use(express.json({ limit: "20kb" }));
 
-  app.get("/api/health", (req, res) => res.json({ ok: true, payments: pagbank.configured, env: config.pagbankEnv }));
+  app.get("/api/health", (req, res) => res.json({ ok: true, payments: mp.configured, env: config.mpEnv }));
   app.get("/api/products", (req, res) => {
     res.set("Cache-Control", "no-store");
     res.json({ products: db.prepare("SELECT * FROM products ORDER BY position, created_at").all().map(productToApi) });
@@ -170,7 +212,8 @@ export function createApp({ db, config, pagbank, log = console }) {
   app.get("/api/orders/:publicId", rl.orderRead, async (req, res, next) => {
     try {
       if (!PUBLIC_ID_RE.test(req.params.publicId)) throw new HttpError(404, "not_found", "Pedido não encontrado.");
-      const view = await orders.getPublicView(req.params.publicId);
+      const hint = typeof req.query.payment_id === "string" ? req.query.payment_id : undefined;
+      const view = await orders.getPublicView(req.params.publicId, hint);
       if (!view) throw new HttpError(404, "not_found", "Pedido não encontrado.");
       res.set("Cache-Control", "no-store");
       res.json(view);
@@ -181,26 +224,6 @@ export function createApp({ db, config, pagbank, log = console }) {
       if (!PUBLIC_ID_RE.test(req.params.publicId)) throw new HttpError(404, "not_found", "Pedido não encontrado.");
       res.json(await orders.retryOrder(req.params.publicId));
     } catch (e) { next(e); }
-  });
-
-  app.post("/api/feedback", rl.feedbackAttempts, (req, res) => {
-    const d = feedbackSchema.parse(req.body);
-    if (d.website) return res.status(201).json({ ok: true }); // bot: finge sucesso, não grava
-    if (d.elapsedMs !== undefined && d.elapsedMs < 1500)
-      throw new HttpError(429, "too_fast", "Envio rápido demais. Revise o formulário e tente novamente.");
-    // Limites por IP (5/h) e globais (200/h) contam apenas envios válidos.
-    const wait = rl.feedbackStored.consume(req.ip) || rl.feedbackGlobal.consume("all");
-    if (wait) throw new HttpError(429, "rate_limited", "Você já enviou várias avaliações. Tente novamente mais tarde.");
-    const ipHash = sha256Hex(`${req.ip}|${config.sessionSecret}`).slice(0, 32);
-    const comment = clean(d.comment);
-    const dup = db
-      .prepare("SELECT 1 FROM feedback WHERE ip_hash=? AND comment=? AND created_at > ?")
-      .get(ipHash, comment, new Date(Date.now() - 86_400_000).toISOString());
-    if (!dup)
-      db.prepare("INSERT INTO feedback (rating,comment,name,email,ip_hash,created_at) VALUES (?,?,?,?,?,?)").run(
-        d.rating, comment, clean(d.name) || null, clean(d.email) || null, ipHash, new Date().toISOString(),
-      );
-    res.status(201).json({ ok: true });
   });
 
   app.use("/api", (req, res) => res.status(404).json({ error: "not_found", message: "Rota não encontrada." }));
@@ -231,4 +254,4 @@ export function createApp({ db, config, pagbank, log = console }) {
   return app;
 }
 
-export { createPagBankClient };
+export { createMercadoPagoClient };

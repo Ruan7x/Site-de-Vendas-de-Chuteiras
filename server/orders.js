@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { newPublicId, sha256Hex } from "./security.js";
-import { PagBankError, PB_ID_RE, verifyAuthenticity } from "./pagbank.js";
+import { MercadoPagoError, PAYMENT_ID_RE, verifySignature } from "./mercadopago.js";
 
 export class HttpError extends Error {
   constructor(status, code, message) {
@@ -26,46 +26,56 @@ export const createOrderSchema = z.object({
 
 const PENDING = new Set(["AWAITING_PAYMENT", "IN_ANALYSIS"]);
 const RETRYABLE = new Set(["DECLINED", "CANCELED", "EXPIRED", "ERROR"]);
-const DEFAULT_PAY_HOSTS = [
-  /(^|\.)pagseguro\.uol\.com\.br$/,
-  /(^|\.)pagseguro\.com\.br$/,
-  /(^|\.)pagbank\.com\.br$/,
-  /(^|\.)pagseguro\.com$/,
-];
+const DEFAULT_PAY_HOSTS = [/(^|\.)mercadopago\.com(\.[a-z]{2})?$/, /(^|\.)mercadolibre\.com(\.[a-z]{2})?$/, /(^|\.)mercadolivre\.com\.br$/];
+const PREFERENCE_ID_RE = /^[A-Za-z0-9_-]{6,80}$/;
+const mpDate = (ms) => new Date(ms).toISOString().replace("Z", "+00:00");
+const toCents = (v) => Math.round(Number(v) * 100);
 
 export const formatBRL = (cents) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }).replace(/\u00a0/g, " ");
 export const orderNumber = (id) => `TN-${String(id).padStart(5, "0")}`;
 
-/** Interpreta o pedido devolvido pela API do PagBank. Fonte única de verdade do status. */
-export function derivePaymentState(pb, totalCents) {
-  const charges = Array.isArray(pb?.charges) ? pb.charges : [];
-  if (!charges.length) return null;
-  const paid = charges.filter((c) => c.status === "PAID");
-  if (paid.length) {
-    const sum = paid.reduce((s, c) => s + Number(c.amount?.value ?? 0), 0);
+/**
+ * Interpreta os pagamentos de um pedido, já lidos da API do Mercado Pago (nunca do navegador).
+ * Fonte única de verdade do status: só "approved" em BRL com valor >= total vira PAID.
+ */
+export function derivePaymentState(payments, totalCents) {
+  const list = (payments || []).filter(Boolean);
+  if (!list.length) return null;
+
+  const approved = list.filter((p) => p.status === "approved" && (!p.currency_id || p.currency_id === "BRL"));
+  if (approved.length) {
+    const sum = approved.reduce((acc, p) => acc + toCents(p.transaction_amount ?? 0), 0);
     return sum >= totalCents
-      ? { status: "PAID", charge: paid[0] }
-      : { status: "VERIFICATION_ERROR", charge: paid[0], reason: `valor pago ${sum} < total ${totalCents}` };
+      ? { status: "PAID", payment: approved[0] }
+      : { status: "VERIFICATION_ERROR", payment: approved[0], reason: `valor pago ${sum} < total ${totalCents}` };
   }
-  const by = (s) => charges.find((c) => c.status === s);
-  const analysis = by("IN_ANALYSIS") || by("AUTHORIZED");
-  if (analysis) return { status: "IN_ANALYSIS", charge: analysis };
-  if (by("WAITING")) return { status: "AWAITING_PAYMENT", charge: by("WAITING") };
-  const last = charges[charges.length - 1];
-  if (last.status === "DECLINED") return { status: "DECLINED", charge: last };
-  if (last.status === "CANCELED") return { status: "CANCELED", charge: last };
-  return null;
+  const refunded = list.find((p) => p.status === "refunded" || p.status === "charged_back");
+  if (refunded) return { status: "REFUNDED", payment: refunded };
+
+  const latest = [...list].sort((x, y) => String(y.date_created ?? "").localeCompare(String(x.date_created ?? "")))[0];
+  switch (latest.status) {
+    case "pending":
+      return { status: "AWAITING_PAYMENT", payment: latest };
+    case "in_process":
+    case "authorized":
+    case "in_mediation":
+      return { status: "IN_ANALYSIS", payment: latest };
+    case "rejected":
+      return { status: "DECLINED", payment: latest };
+    case "cancelled":
+      return { status: latest.status_detail === "expired" ? "EXPIRED" : "CANCELED", payment: latest };
+    default:
+      return null;
+  }
 }
 
-export function createOrdersService({ db, config, pagbank, log = console, now = () => Date.now() }) {
+export function createOrdersService({ db, config, mp, log = console, now = () => Date.now() }) {
   const q = {
     byPublic: db.prepare("SELECT * FROM orders WHERE public_id=?"),
     byId: db.prepare("SELECT * FROM orders WHERE id=?"),
     byRef: db.prepare("SELECT * FROM orders WHERE reference_id=?"),
     byIdem: db.prepare("SELECT * FROM orders WHERE idempotency_key=?"),
-    byPbOrder: db.prepare("SELECT * FROM orders WHERE pagbank_order_id=?"),
-    byPbCheckout: db.prepare("SELECT * FROM orders WHERE pagbank_checkout_id=?"),
     product: db.prepare("SELECT * FROM products WHERE id=?"),
   };
   const iso = () => new Date(now()).toISOString();
@@ -103,46 +113,40 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
     return null;
   };
 
-  // ---------- checkout PagBank ----------
+  // ---------- checkout Mercado Pago (Checkout Pro: preferência de pagamento) ----------
   async function openCheckout(order) {
-    if (!pagbank.configured)
+    if (!mp.configured)
       throw new HttpError(503, "payments_not_configured", "Pagamentos ainda não estão configurados nesta loja.");
     const items = JSON.parse(order.items_json);
-    const hook = `${config.webhookBaseUrl}/api/webhooks/pagbank`;
     const back = `${config.publicUrl}/pedido/${order.public_id}`;
     const payload = {
-      reference_id: order.reference_id,
-      items: items.map((i, idx) => ({
-        reference_id: `${order.reference_id}-${idx}`, // prefixo de 24 chars = reference do pedido
-        name: `${i.name} (Tam. ${i.size})`.slice(0, 100),
+      items: items.map((i) => ({
+        id: i.productId,
+        title: `${i.name} (Tam. ${i.size})`.slice(0, 120),
         quantity: i.quantity,
-        unit_amount: i.unitCents,
+        unit_price: i.unitCents / 100,
+        currency_id: "BRL",
       })),
-      payment_methods: [{ type: "CREDIT_CARD" }, { type: "PIX" }, { type: "BOLETO" }],
-      redirect_url: back,
-      return_url: back,
-      notification_urls: [hook],
-      payment_notification_urls: [hook],
+      external_reference: order.reference_id,
+      back_urls: { success: back, pending: back, failure: back },
+      statement_descriptor: "TN SPORTS",
+      expires: true,
+      expiration_date_from: mpDate(now()),
+      expiration_date_to: mpDate(now() + 2 * 3600_000),
     };
-    if (config.interestFreeInstallments) {
-      const n = String(config.interestFreeInstallments);
-      payload.payment_methods_configs = [
-        { type: "CREDIT_CARD", config_options: [
-          { option: "INSTALLMENTS_LIMIT", value: n },
-          { option: "INTEREST_FREE_INSTALLMENTS", value: n },
-        ] },
-      ];
-    }
-    const previous = order.pagbank_checkout_id;
+    // O Mercado Pago só aceita auto_return com back_urls https e notification_url pública (https, fora do localhost).
+    if (config.publicHttps) payload.auto_return = "approved";
+    if (config.webhookReachable) payload.notification_url = `${config.webhookBaseUrl}/api/webhooks/mercadopago`;
+
     try {
-      const res = await pagbank.createCheckout(payload);
-      const pay = (res?.links || []).find((l) => l.rel === "PAY")?.href;
-      const payUrl = pay && safePayUrl(pay);
-      if (!res?.id || !PB_ID_RE.checkout.test(res.id) || !payUrl) throw new PagBankError("Resposta de checkout inesperada");
+      const res = await mp.createPreference(payload);
+      const href = config.mpEnv === "sandbox" && config.useSandboxCheckout && res?.sandbox_init_point ? res.sandbox_init_point : res?.init_point;
+      const payUrl = href && safePayUrl(href);
+      if (!res?.id || !PREFERENCE_ID_RE.test(String(res.id)) || !payUrl) throw new MercadoPagoError("Resposta de checkout inesperada");
       db.prepare(
-        `UPDATE orders SET status='AWAITING_PAYMENT', pagbank_checkout_id=?, pagbank_pay_url=?, checkout_expires_at=?, last_error=NULL,
-         pagbank_order_id=NULL, pagbank_charge_id=NULL, last_checked_at=0, updated_at=? WHERE id=?`,
-      ).run(res.id, payUrl, new Date(now() + 2 * 3600_000).toISOString(), iso(), order.id);
+        `UPDATE orders SET status='AWAITING_PAYMENT', provider_checkout_id=?, provider_pay_url=?, checkout_expires_at=?, last_error=NULL,
+         last_checked_at=0, updated_at=? WHERE id=?`,
+      ).run(String(res.id), payUrl, new Date(now() + 2 * 3600_000).toISOString(), iso(), order.id);
     } catch (err) {
       db.prepare("UPDATE orders SET status='ERROR', last_error=?, updated_at=? WHERE id=?").run(
         String(err.message).slice(0, 300), iso(), order.id,
@@ -150,17 +154,13 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
       log.error(`[order ${order.id}] falha ao criar checkout: ${err.message}`);
       throw new HttpError(502, "checkout_failed", "Não foi possível iniciar o pagamento agora. Tente novamente em instantes.");
     }
-    // Novo checkout = nova tentativa: o anterior é inativado (best-effort) para não ser pago depois por engano.
-    if (previous && PB_ID_RE.checkout.test(previous)) {
-      pagbank.inactivateCheckout(previous).catch((e) => log.warn(`[order ${order.id}] não inativou checkout anterior: ${e.message}`));
-    }
     return q.byId.get(order.id);
   }
 
   const summary = (o) => ({
     publicId: o.public_id,
     status: o.status,
-    payUrl: o.status === "AWAITING_PAYMENT" ? o.pagbank_pay_url : null,
+    payUrl: o.status === "AWAITING_PAYMENT" ? o.provider_pay_url : null,
   });
 
   async function createOrder(input) {
@@ -200,95 +200,92 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
     return summary(await openCheckout(q.byId.get(o.id)));
   }
 
-  // ---------- atualização de status (PAID é terminal; nunca regride) ----------
+  // ---------- atualização de status (PAID só pode virar REFUNDED; nunca regride para pendente/recusado) ----------
   function setStatus(order, status, extra = {}) {
     const cur = q.byId.get(order.id);
-    if (cur.status === "PAID") return "already_paid";
+    if (cur.status === "REFUNDED") return "already_refunded";
+    if (cur.status === "PAID" && status !== "REFUNDED") return "already_paid";
     db.prepare(
-      `UPDATE orders SET status=?, pagbank_order_id=COALESCE(?,pagbank_order_id), pagbank_charge_id=COALESCE(?,pagbank_charge_id),
+      `UPDATE orders SET status=?, provider_payment_id=COALESCE(?,provider_payment_id),
        paid_at=CASE WHEN ?='PAID' THEN COALESCE(?,?) ELSE paid_at END, last_error=?, updated_at=? WHERE id=?`,
-    ).run(status, extra.pbOrderId ?? null, extra.chargeId ?? null, status, extra.paidAt ?? null, iso(), extra.reason ?? null, iso(), order.id);
+    ).run(status, extra.paymentId ? String(extra.paymentId) : null, status, extra.paidAt ?? null, iso(), extra.reason ?? null, iso(), order.id);
     return `status:${status}`;
   }
 
-  const matchesOrder = (order, pb) =>
-    pb.reference_id === order.reference_id ||
-    (pb.items || []).some((i) => typeof i.reference_id === "string" && i.reference_id.slice(0, 24) === order.reference_id) ||
-    (order.pagbank_order_id && pb.id === order.pagbank_order_id);
-
-  /** Consulta o pedido no PagBank (com o token privado) e aplica o status confirmado. */
-  async function reconcile(order, pbOrderId) {
-    if (!PB_ID_RE.order.test(pbOrderId)) return "invalid_id";
-    const pb = await pagbank.getOrder(pbOrderId);
-    if (!pb || !matchesOrder(order, pb)) return "reference_mismatch";
-    const st = derivePaymentState(pb, order.total_cents);
-    if (!st) return "no_charges";
+  /**
+   * Consulta os pagamentos do pedido no Mercado Pago (com o token privado) e aplica o status confirmado.
+   * `known` é um pagamento já lido da API (ex.: vindo do webhook ou do retorno do checkout).
+   */
+  async function reconcile(order, known) {
+    const payments = [];
+    if (known && String(known.external_reference) === order.reference_id) payments.push(known);
+    const found = await mp.searchPayments(order.reference_id);
+    for (const p of found?.results ?? []) {
+      if (p?.external_reference === order.reference_id && !payments.some((x) => String(x.id) === String(p.id))) payments.push(p);
+    }
+    const st = derivePaymentState(payments, order.total_cents);
+    if (!st) {
+      const cur = q.byId.get(order.id);
+      if (cur.status === "AWAITING_PAYMENT" && cur.checkout_expires_at && Date.parse(cur.checkout_expires_at) < now())
+        return setStatus(order, "EXPIRED");
+      return "no_payments";
+    }
     if (st.status === "VERIFICATION_ERROR") log.error(`[order ${order.id}] divergência de valor: ${st.reason}`);
-    return setStatus(order, st.status, {
-      pbOrderId: pb.id, chargeId: st.charge?.id, paidAt: st.charge?.paid_at, reason: st.reason,
-    });
+    return setStatus(order, st.status, { paymentId: st.payment?.id, paidAt: st.payment?.date_approved, reason: st.reason });
   }
 
-  async function confirmExpiry(order) {
-    if (!order.pagbank_checkout_id || !PB_ID_RE.checkout.test(order.pagbank_checkout_id)) return "no_checkout";
-    const c = await pagbank.getCheckout(order.pagbank_checkout_id);
-    if (c?.status === "EXPIRED" && order.status === "AWAITING_PAYMENT") return setStatus(order, "EXPIRED");
-    return "not_expired";
-  }
+  const retryable = (err) => err instanceof MercadoPagoError && (err.status === 0 || err.status >= 500 || err.status === 429);
 
-  function locate(payload) {
-    const refs = new Set();
-    if (typeof payload.reference_id === "string") refs.add(payload.reference_id);
-    for (const i of payload.items || []) if (typeof i?.reference_id === "string") refs.add(i.reference_id.slice(0, 24));
-    for (const r of refs) {
-      const o = q.byRef.get(r);
-      if (o) return o;
-    }
-    return typeof payload.id === "string" ? q.byPbOrder.get(payload.id) : undefined;
-  }
-
-  async function handleWebhook(rawBody, headers) {
-    if (!config.pagbankToken) return { code: 503, body: { error: "payments_not_configured" } };
-    const signed = verifyAuthenticity(rawBody, headers["x-authenticity-token"], config.pagbankToken);
-    if (config.requireSignature && !signed) {
-      log.warn("[webhook] assinatura inválida/ausente — descartado");
-      return { code: 401, body: { error: "invalid_signature" } };
-    }
-    let payload;
+  /** `query` = parâmetros da URL da notificação (o Mercado Pago envia data.id e type na query). */
+  async function handleWebhook(rawBody, headers, query = {}) {
+    if (!config.mpAccessToken) return { code: 503, body: { error: "payments_not_configured" } };
+    let payload = {};
     try {
-      payload = JSON.parse(rawBody);
+      payload = rawBody ? JSON.parse(rawBody) : {};
     } catch {
       return { code: 400, body: { error: "invalid_json" } };
     }
     if (!payload || typeof payload !== "object") return { code: 400, body: { error: "invalid_payload" } };
 
-    const eventKey = sha256Hex(rawBody);
+    const dataId = String(query["data.id"] ?? payload?.data?.id ?? (query.topic === "payment" ? query.id : "") ?? "");
+    const signed = verifySignature({
+      signature: headers["x-signature"],
+      requestId: headers["x-request-id"],
+      dataId: String(query["data.id"] ?? payload?.data?.id ?? ""),
+      secret: config.mpWebhookSecret,
+    });
+    if (config.requireSignature && !signed) {
+      log.warn("[webhook] assinatura inválida/ausente — descartado");
+      return { code: 401, body: { error: "invalid_signature" } };
+    }
+
+    const type = String(payload.type ?? query.type ?? query.topic ?? "");
+    if (type !== "payment" || !PAYMENT_ID_RE.test(dataId)) return { code: 200, body: { status: "ignored" } };
+
+    const eventKey = sha256Hex(rawBody || `${dataId}|${type}`);
     if (db.prepare("SELECT 1 FROM payment_events WHERE event_key=?").get(eventKey))
       return { code: 200, body: { status: "duplicate" } };
 
-    const id = typeof payload.id === "string" ? payload.id : "";
     let outcome = "ignored";
     let order = null;
     try {
-      if (PB_ID_RE.order.test(id)) {
-        order = locate(payload);
-        outcome = order ? await reconcile(order, id) : "unknown_order";
-      } else if (PB_ID_RE.checkout.test(id)) {
-        order = q.byPbCheckout.get(id);
-        if (order && payload.status === "EXPIRED") outcome = await confirmExpiry(order);
-      }
+      // O corpo do webhook nunca é usado como verdade: o pagamento é lido na API com o token privado.
+      const payment = await mp.getPayment(dataId);
+      const ref = typeof payment?.external_reference === "string" ? payment.external_reference : "";
+      order = ref ? q.byRef.get(ref) : null;
+      outcome = order ? await reconcile(order, payment) : "unknown_order";
     } catch (err) {
-      if (err instanceof PagBankError && (err.status === 0 || err.status >= 500 || err.status === 429)) {
-        log.error(`[webhook] PagBank indisponível: ${err.message}`);
-        return { code: 503, body: { error: "verification_unavailable" } }; // PagBank reenviará
+      if (retryable(err)) {
+        log.error(`[webhook] Mercado Pago indisponível: ${err.message}`);
+        return { code: 503, body: { error: "verification_unavailable" } }; // o Mercado Pago reenvia
       }
-      if (err instanceof PagBankError) outcome = `pagbank_${err.status}`;
+      if (err instanceof MercadoPagoError) outcome = `mercadopago_${err.status}`;
       else throw err;
     }
     db.prepare("INSERT OR IGNORE INTO payment_events (event_key,order_id,source,outcome,received_at) VALUES (?,?,?,?,?)").run(
       eventKey, order?.id ?? null, "webhook", outcome, iso(),
     );
-    log.log(`[webhook] ${id.slice(0, 9)}… -> ${outcome}${order ? ` (pedido ${order.id})` : ""}`);
+    log.log(`[webhook] pagamento ${dataId} -> ${outcome}${order ? ` (pedido ${order.id})` : ""}`);
     return { code: 200, body: { status: outcome } };
   }
 
@@ -300,7 +297,7 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
       .join("; ");
     const msg =
       `Olá, TN Sports! Realizei uma compra pelo site.\n\nPedido: #${orderNumber(o.id)}\nItens: ${items}\n` +
-      `Valor total: ${formatBRL(o.total_cents)}\nPagamento: aprovado pelo PagBank\n\nGostaria de confirmar os detalhes da entrega.`;
+      `Valor total: ${formatBRL(o.total_cents)}\nPagamento: aprovado pelo Mercado Pago\n\nGostaria de confirmar os detalhes da entrega.`;
     return `https://wa.me/${config.whatsappNumber}?text=${encodeURIComponent(msg)}`;
   }
 
@@ -313,7 +310,7 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
       total: o.total_cents / 100,
       createdAt: o.created_at,
       paidAt: o.paid_at,
-      payUrl: o.status === "AWAITING_PAYMENT" ? o.pagbank_pay_url : null,
+      payUrl: o.status === "AWAITING_PAYMENT" ? o.provider_pay_url : null,
       canRetry: RETRYABLE.has(o.status),
       whatsappUrl: whatsappUrl(o),
       whatsappConfigured: /^55\d{10,11}$/.test(config.whatsappNumber),
@@ -321,15 +318,25 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
     };
   }
 
-  async function getPublicView(publicId) {
+  /** `paymentHint`: id do pagamento que o Mercado Pago anexa à URL de retorno (só uma dica; é conferido na API). */
+  async function getPublicView(publicId, paymentHint) {
     let o = q.byPublic.get(publicId);
     if (!o) return null;
     let verification = "ok";
-    if (PENDING.has(o.status) && now() - o.last_checked_at > 8000 && pagbank.configured) {
-      db.prepare("UPDATE orders SET last_checked_at=? WHERE id=?").run(now(), o.id); // throttle
+    const hint = typeof paymentHint === "string" && PAYMENT_ID_RE.test(paymentHint) ? paymentHint : null;
+    const due = now() - o.last_checked_at > 8000;
+    if ((PENDING.has(o.status) || (hint && o.status !== "PAID" && o.status !== "REFUNDED")) && (due || hint) && mp.configured) {
+      db.prepare("UPDATE orders SET last_checked_at=? WHERE id=?").run(now(), o.id); // limita as consultas
       try {
-        if (o.pagbank_order_id) await reconcile(o, o.pagbank_order_id);
-        else if (o.checkout_expires_at && Date.parse(o.checkout_expires_at) < now()) await confirmExpiry(o);
+        let known = null;
+        if (hint) {
+          try {
+            known = await mp.getPayment(hint);
+          } catch (err) {
+            if (!(err instanceof MercadoPagoError && err.status === 404)) throw err;
+          }
+        }
+        await reconcile(o, known);
       } catch (err) {
         verification = "error";
         log.error(`[order ${o.id}] reconciliação falhou: ${err.message}`);
@@ -341,7 +348,7 @@ export function createOrdersService({ db, config, pagbank, log = console, now = 
 
   const listOrders = () =>
     db.prepare("SELECT * FROM orders ORDER BY id DESC LIMIT 200").all().map((o) => ({
-      ...toView(o), publicId: undefined, pagbankOrderId: o.pagbank_order_id, lastError: o.last_error,
+      ...toView(o), publicId: undefined, paymentId: o.provider_payment_id, lastError: o.last_error,
     }));
 
   return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, priceCart };

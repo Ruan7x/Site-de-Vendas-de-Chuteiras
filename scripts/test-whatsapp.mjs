@@ -1,5 +1,5 @@
 // Cria um pedido PAGO DE TESTE direto no banco local, para você testar a página /pedido/:id
-// e o botão/redirecionamento do WhatsApp SEM usar o PagBank.
+// e o botão/redirecionamento do WhatsApp SEM usar o Mercado Pago.
 // Uso: npm run test:whatsapp
 // Não é uma rota da API (ninguém acessa pela internet) e é bloqueado em produção.
 import { loadConfig, loadDotEnv } from "../server/config.js";
@@ -8,8 +8,8 @@ import { openDb } from "../server/db.js";
 import { newPublicId } from "../server/security.js";
 
 const config = loadConfig();
-if (config.pagbankEnv === "production" || process.env.NODE_ENV === "production") {
-  console.error("Recusado: este script é só para desenvolvimento (PAGBANK_ENV=production detectado).");
+if (config.mpEnv === "production" || process.env.NODE_ENV === "production") {
+  console.error("Recusado: este script é só para desenvolvimento (MP_ENV=production detectado).");
   process.exit(1);
 }
 if (!/^55\d{10,11}$/.test(config.whatsappNumber)) {
