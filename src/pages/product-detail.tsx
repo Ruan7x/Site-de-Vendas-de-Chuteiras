@@ -10,10 +10,14 @@ import { useProducts } from "@/lib/products-store";
 
 export default function ProductDetail() {
   const { id = "" } = useParams<{ id: string }>();
-  const { products } = useProducts();
+  const { products, loading } = useProducts();
   const product = products.find((p) => p.id === id);
   const { add } = useCart();
   const [size, setSize] = useState<number | null>(null);
+
+  if (!product && loading) {
+    return <div className="mx-auto max-w-7xl px-4 py-20 text-center text-muted-foreground">Carregando…</div>;
+  }
 
   if (!product) {
     return (

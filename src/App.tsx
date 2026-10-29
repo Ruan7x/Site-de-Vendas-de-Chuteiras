@@ -8,6 +8,7 @@ import Home from "@/pages/home";
 import Products from "@/pages/products";
 import ProductDetail from "@/pages/product-detail";
 import Admin from "@/pages/admin";
+import OrderPage from "@/pages/order";
 import NotFound from "@/pages/not-found";
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
               <Route path="/" element={<Home />} />
               <Route path="/produtos" element={<Products />} />
               <Route path="/produtos/:id" element={<ProductDetail />} />
+              <Route path="/pedido/:publicId" element={<OrderPage />} />
               <Route path="/admin" element={<Admin />} />
               <Route path="*" element={<NotFound />} />
             </Routes>

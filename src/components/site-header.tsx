@@ -1,5 +1,6 @@
-import { Link } from "react-router-dom";
-import { Menu, Settings, ShoppingBag, Trash2 } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Loader2, Menu, Settings, ShoppingBag, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,13 +11,35 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useCart } from "@/lib/cart";
+import { startCheckout } from "@/lib/checkout";
 import { categories, formatPrice } from "@/lib/products";
 
 function CartSheet() {
   const { count, detailed, total, remove } = useCart();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [paying, setPaying] = useState(false);
+
+  // Usa o carrinho existente; o servidor revalida produtos, tamanhos e preços.
+  const checkout = async () => {
+    if (paying || detailed.length === 0) return;
+    setPaying(true);
+    try {
+      const res = await startCheckout(detailed.map((l) => ({ id: l.product.id, size: l.size, qty: l.qty })));
+      if (res.payUrl) {
+        window.location.assign(res.payUrl); // página segura de pagamento do PagBank
+        return;
+      }
+      setOpen(false);
+      navigate(`/pedido/${res.publicId}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Não foi possível iniciar o pagamento.");
+    }
+    setPaying(false);
+  };
 
   return (
-    <Sheet>
+    <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" aria-label="Abrir sacola" className="relative">
           <ShoppingBag />
@@ -78,8 +101,20 @@ function CartSheet() {
             <span className="text-muted-foreground">Total</span>
             <span className="font-display text-xl">{formatPrice(total)}</span>
           </div>
-          <Button variant="volt" size="xl" className="w-full" disabled={detailed.length === 0}>
-            Finalizar compra
+          <Button
+            variant="volt"
+            size="xl"
+            className="w-full"
+            disabled={detailed.length === 0 || paying}
+            onClick={checkout}
+          >
+            {paying ? (
+              <>
+                <Loader2 className="animate-spin" /> Redirecionando…
+              </>
+            ) : (
+              "Finalizar compra"
+            )}
           </Button>
           <p className="text-center text-xs text-muted-foreground">
             Frete grátis acima de R$ 499 · Até 12x sem juros

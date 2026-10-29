@@ -1,90 +1,69 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import { products as seedProducts, type Product } from "@/lib/products";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { api } from "@/lib/api";
+import type { Product } from "@/lib/products";
 
-const STORAGE_KEY = "tn-sports-products";
-
-type ProductInput = Omit<Product, "id"> & { id?: string };
+/** Dados enviados ao painel admin. `imageData` = upload (data URL); `image` = URL/caminho existente. */
+export type ProductInput = Omit<Product, "id" | "image" | "oldPrice" | "tag"> & {
+  oldPrice?: number | null;
+  tag?: string | null;
+  image?: string;
+  imageData?: string;
+};
 
 type ProductsContextValue = {
   products: Product[];
-  addProduct: (data: ProductInput) => Product;
-  updateProduct: (id: string, data: ProductInput) => void;
-  removeProduct: (id: string) => void;
-  resetToDefaults: () => void;
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+  addProduct: (data: ProductInput) => Promise<void>;
+  updateProduct: (id: string, data: ProductInput) => Promise<void>;
+  removeProduct: (id: string) => Promise<void>;
 };
 
 const ProductsContext = createContext<ProductsContextValue | null>(null);
 
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)+/g, "");
-}
-
-function loadInitial(): Product[] {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Product[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    /* ignore corrupted storage */
-  }
-  return seedProducts;
-}
-
+/** O catálogo vem do servidor (única fonte de verdade — é ele que valida preços no checkout). */
 export function ProductsProvider({ children }: { children: ReactNode }) {
-  const [list, setList] = useState<Product[]>(() => loadInitial());
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await api<{ products: Product[] }>("/api/products");
+      setProducts(data.products);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao carregar produtos.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-    } catch {
-      /* storage full or unavailable - ignore */
-    }
-  }, [list]);
+    void refresh();
+  }, [refresh]);
 
   const value = useMemo<ProductsContextValue>(
     () => ({
-      products: list,
-      addProduct: (data) => {
-        const base = data.id?.trim() ? slugify(data.id) : slugify(data.name);
-        let id = base || `chuteira-${Date.now()}`;
-        setList((prev) => {
-          let unique = id;
-          let n = 2;
-          while (prev.some((p) => p.id === unique)) {
-            unique = `${id}-${n}`;
-            n += 1;
-          }
-          id = unique;
-          const newProduct: Product = { ...data, id: unique };
-          return [...prev, newProduct];
-        });
-        return { ...data, id };
+      products,
+      loading,
+      error,
+      refresh,
+      addProduct: async (data) => {
+        await api("/api/admin/products", { method: "POST", json: data });
+        await refresh();
       },
-      updateProduct: (id, data) => {
-        setList((prev) => prev.map((p) => (p.id === id ? { ...data, id } : p)));
+      updateProduct: async (id, data) => {
+        await api(`/api/admin/products/${encodeURIComponent(id)}`, { method: "PUT", json: data });
+        await refresh();
       },
-      removeProduct: (id) => {
-        setList((prev) => prev.filter((p) => p.id !== id));
-      },
-      resetToDefaults: () => {
-        setList(seedProducts);
+      removeProduct: async (id) => {
+        await api(`/api/admin/products/${encodeURIComponent(id)}`, { method: "DELETE" });
+        await refresh();
       },
     }),
-    [list],
+    [products, loading, error, refresh],
   );
 
   return <ProductsContext.Provider value={value}>{children}</ProductsContext.Provider>;

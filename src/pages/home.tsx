@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { Truck, ShieldCheck, RefreshCcw, CreditCard } from "lucide-react";
 import heroBoot from "@/assets/hero-boot.jpg";
 import storyFounder from "@/assets/story-founder.jpg";
+import { FeedbackSection } from "@/components/feedback-section";
 import { Button } from "@/components/ui/button";
 import { ProductCard } from "@/components/product-card";
 import { categories } from "@/lib/products";
@@ -147,6 +148,7 @@ export default function Home() {
           </div>
         </div>
       </section>
+      <FeedbackSection />
     </>
   );
 }

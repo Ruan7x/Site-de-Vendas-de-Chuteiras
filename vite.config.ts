@@ -12,5 +12,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // O backend (server/) roda na 3001; o Vite encaminha a API e os uploads.
+    proxy: {
+      "/api": "http://localhost:3001",
+      "/uploads": "http://localhost:3001",
+    },
   },
 });

@@ -4,10 +4,7 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * TN Sports design system — athletic, high-contrast, volt accent.
- * All colors in oklch. Never hardcode colors in components.
- */
+/* Tema da TN Sports: fundo escuro, verde-limão como destaque (cores em oklch). */
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
@@ -99,4 +96,18 @@
 
 @utility skew-tag {
   transform: skewX(-12deg);
+}
+
+/* Animação das estrelas do feedback */
+@keyframes star-pop {
+  0% { transform: scale(1) rotate(0deg); }
+  40% { transform: scale(1.55) rotate(-14deg); }
+  70% { transform: scale(0.9) rotate(6deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.animate-star-pop {
+  animation: star-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-star-pop { animation: none; }
 }

@@ -4,7 +4,7 @@ import { categories, type Category } from "@/lib/products";
 import { useProducts } from "@/lib/products-store";
 
 export default function Products() {
-  const { products } = useProducts();
+  const { products, loading, error } = useProducts();
   const [searchParams] = useSearchParams();
   const raw = searchParams.get("cat");
   const cat = categories.includes(raw as Category) ? (raw as Category) : undefined;
@@ -19,6 +19,8 @@ export default function Products() {
       <p className="mt-3 text-sm text-muted-foreground">
         {list.length} {list.length === 1 ? "modelo" : "modelos"} disponíveis
       </p>
+      {loading && <p className="mt-2 text-sm text-muted-foreground">Carregando catálogo…</p>}
+      {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
 
       <div className="mt-8 flex flex-wrap gap-2">
         <Link

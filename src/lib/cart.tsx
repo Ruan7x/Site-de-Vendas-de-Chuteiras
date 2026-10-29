@@ -8,6 +8,7 @@ type CartContextValue = {
   lines: CartLine[];
   add: (productId: string, size: number) => void;
   remove: (productId: string, size: number) => void;
+  clear: () => void;
   count: number;
   total: number;
   detailed: { product: Product; size: number; qty: number }[];
@@ -60,6 +61,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
           }
           return [...prev, { id: productId, size, qty: 1 }];
         }),
+      clear: () => setLines((prev) => (prev.length ? [] : prev)),
       remove: (productId, size) =>
         setLines((prev) =>
           prev
