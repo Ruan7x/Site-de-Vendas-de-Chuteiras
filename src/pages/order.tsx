@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Clock, Loader2, MessageCircle, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { openPayTab } from "@/lib/pay-tab";
 import { api, ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart";
 import { forgetCheckoutKey } from "@/lib/checkout";
@@ -86,6 +87,23 @@ const toneClass: Record<Tone, string> = {
   danger: "border-destructive text-destructive",
 };
 
+// Marca (em todas as abas) que o WhatsApp deste pedido já foi aberto, para não abrir duas vezes.
+const waKey = (id: string) => `tn-sports-wa-${id}`;
+function waAlreadyOpened(id: string) {
+  try {
+    return localStorage.getItem(waKey(id)) === "1";
+  } catch {
+    return false;
+  }
+}
+function markWaOpened(id: string) {
+  try {
+    localStorage.setItem(waKey(id), "1");
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function OrderPage() {
   const { publicId = "" } = useParams<{ publicId: string }>();
   const [searchParams] = useSearchParams();
@@ -136,21 +154,18 @@ export default function OrderPage() {
     paidHandled.current = true; // executa uma única vez por visita (clear() muda de identidade a cada render)
     clear();
     forgetCheckoutKey();
-    const flag = `tn-sports-wa-${order.publicId}`;
-    if (!order.whatsappUrl || sessionStorage.getItem(flag)) return;
-    setCountdown(6);
+    document.title = "Pagamento confirmado · TN Sports";
+    if (!order.whatsappUrl || waAlreadyOpened(order.publicId)) return;
+    setCountdown(4);
   }, [status, order, clear]);
 
   useEffect(() => {
     if (countdown === null || !order?.whatsappUrl) return;
     if (countdown <= 0) {
-      if (!redirected.current) {
+      // outra aba (ex.: a do Mercado Pago, ao voltar para o site) pode já ter aberto o WhatsApp
+      if (!redirected.current && !waAlreadyOpened(order.publicId)) {
         redirected.current = true;
-        try {
-          sessionStorage.setItem(`tn-sports-wa-${order.publicId}`, "1");
-        } catch {
-          /* ignore */
-        }
+        markWaOpened(order.publicId);
         window.location.assign(order.whatsappUrl);
       }
       return;
@@ -168,9 +183,18 @@ export default function OrderPage() {
   const retry = async () => {
     setRetrying(true);
     try {
-      const res = await api<{ payUrl: string | null }>(`/api/orders/${encodeURIComponent(publicId)}/retry`, { method: "POST" });
-      if (res.payUrl) window.location.assign(res.payUrl);
-      else await load();
+      const tab = openPayTab();
+      const res = await api<{ payUrl: string | null }>(`/api/orders/${encodeURIComponent(publicId)}/retry`, { method: "POST" }).catch(
+        (e) => {
+          tab.close();
+          throw e;
+        },
+      );
+      if (res.payUrl && !tab.go(res.payUrl)) window.location.assign(res.payUrl);
+      else {
+        if (!res.payUrl) tab.close();
+        await load();
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Não foi possível tentar novamente.");
     }
@@ -246,6 +270,13 @@ export default function OrderPage() {
         </div>
       </div>
 
+      {pending && (
+        <p className="mt-6 border-l-2 border-primary pl-4 text-sm text-muted-foreground">
+          Conclua o pagamento na aba do Mercado Pago. <strong className="text-foreground">Deixe esta página aberta</strong>: ela
+          abre o WhatsApp da loja sozinha assim que o pagamento for confirmado.
+        </p>
+      )}
+
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">
         {order.status === "PAID" &&
           (order.whatsappUrl ? (
@@ -263,7 +294,9 @@ export default function OrderPage() {
 
         {order.status === "AWAITING_PAYMENT" && order.payUrl && (
           <Button asChild variant="volt" size="xl" className="flex-1">
-            <a href={order.payUrl}>Ir para o pagamento</a>
+            <a href={order.payUrl} target="_blank" rel="noopener noreferrer">
+              Ir para o pagamento
+            </a>
           </Button>
         )}
 
