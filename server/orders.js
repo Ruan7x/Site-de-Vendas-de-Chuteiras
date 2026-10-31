@@ -326,7 +326,7 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     if (!o) return null;
     let verification = "ok";
     const hint = typeof paymentHint === "string" && PAYMENT_ID_RE.test(paymentHint) ? paymentHint : null;
-    const due = now() - o.last_checked_at > 8000;
+    const due = now() - o.last_checked_at > 4000;
     if ((PENDING.has(o.status) || (hint && o.status !== "PAID" && o.status !== "REFUNDED")) && (due || hint) && mp.configured) {
       db.prepare("UPDATE orders SET last_checked_at=? WHERE id=?").run(now(), o.id); // limita as consultas
       try {

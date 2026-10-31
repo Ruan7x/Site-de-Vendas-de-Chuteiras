@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Clock, Loader2, MessageCircle, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { openPayTab } from "@/lib/pay-tab";
+import { closePayTab, openPayTab } from "@/lib/pay-tab";
 import { api, ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart";
 import { forgetCheckoutKey } from "@/lib/checkout";
@@ -144,7 +144,7 @@ export default function OrderPage() {
     const t = setInterval(() => {
       if (Date.now() - started > 20 * 60_000) clearInterval(t);
       else void load();
-    }, 6000);
+    }, 4000);
     return () => clearInterval(t);
   }, [pending, load]);
 
@@ -155,8 +155,10 @@ export default function OrderPage() {
     clear();
     forgetCheckoutKey();
     document.title = "Pagamento confirmado · TN Sports";
+    // fecha a aba do Mercado Pago e traz esta aba de volta para seguir ao WhatsApp
+    const closed = closePayTab();
     if (!order.whatsappUrl || waAlreadyOpened(order.publicId)) return;
-    setCountdown(4);
+    setCountdown(closed ? 2 : 4);
   }, [status, order, clear]);
 
   useEffect(() => {

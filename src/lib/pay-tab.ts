@@ -3,6 +3,23 @@
  * função para levá-la ao link do Mercado Pago. Assim a aba do site fica na página do pedido,
  * acompanhando o pagamento e abrindo o WhatsApp quando ele for confirmado.
  */
+// Aba do Mercado Pago aberta nesta visita ao site (some ao recarregar a página, e tudo bem).
+let activeTab: Window | null = null;
+
+/** Fecha a aba do Mercado Pago aberta pelo site, se ainda existir. Retorna true se fechou. */
+export function closePayTab() {
+  const tab = activeTab;
+  activeTab = null;
+  if (!tab || tab.closed) return false;
+  try {
+    tab.close();
+    window.focus();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function openPayTab() {
   let tab: Window | null = null;
   try {
@@ -20,8 +37,10 @@ export function openPayTab() {
     go(url: string) {
       if (!tab || tab.closed) return false;
       try {
-        tab.opener = null;
+        // A ligação com a aba (opener) é mantida de propósito: sem ela o navegador não deixa o site
+        // fechar a aba do Mercado Pago quando o pagamento for aprovado. A aba só abre o link oficial.
         tab.location.href = url;
+        activeTab = tab;
         return true;
       } catch {
         return false;
