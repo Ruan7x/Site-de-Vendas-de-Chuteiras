@@ -51,6 +51,7 @@ export function createApp({ db, config, mp, log = console }) {
   app.disable("x-powered-by");
   app.set("trust proxy", config.trustProxy);
   const orders = createOrdersService({ db, config, mp, log });
+  app.locals.orders = orders;
 
   app.use((req, res, next) => {
     res.set({ "X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin", "X-Frame-Options": "DENY" });
@@ -175,7 +176,11 @@ export function createApp({ db, config, mp, log = console }) {
     if (!r.changes) throw new HttpError(404, "not_found", "Produto não encontrado.");
     res.json({ ok: true });
   });
-  admin.get("/orders", (req, res) => res.json({ orders: orders.listOrders() }));
+  admin.get("/orders", async (req, res) => {
+    // confere os pendentes recentes antes de listar (limitado para a tela não demorar)
+    await orders.reconcilePending({ minIntervalMs: 10_000, limit: 10 }).catch(() => {});
+    res.json({ orders: orders.listOrders() });
+  });
   admin.get("/feedback", (req, res) => {
     const rows = db
       .prepare("SELECT id,rating,comment,name,email,model,images,created_at AS createdAt FROM feedback ORDER BY id DESC LIMIT 500")

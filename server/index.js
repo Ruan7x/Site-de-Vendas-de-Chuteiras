@@ -9,6 +9,20 @@ const db = openDb(config.dbPath);
 const mp = createMercadoPagoClient({ accessToken: config.mpAccessToken, baseUrl: config.mpBaseUrl });
 const app = createApp({ db, config, mp });
 
+// Confere os pedidos pendentes a cada minuto (funciona mesmo sem webhook configurado).
+if (mp.configured) {
+  let running = false;
+  setInterval(async () => {
+    if (running) return;
+    running = true;
+    try {
+      await app.locals.orders.reconcilePending();
+    } finally {
+      running = false;
+    }
+  }, 60_000).unref();
+}
+
 app.listen(config.port, () => {
   console.log(`TN Sports API em http://localhost:${config.port} (Mercado Pago: ${config.mpEnv})`);
   const warn = (m) => console.warn(`${m}`);

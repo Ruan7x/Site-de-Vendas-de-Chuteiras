@@ -206,6 +206,7 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     const cur = q.byId.get(order.id);
     if (cur.status === "REFUNDED") return "already_refunded";
     if (cur.status === "PAID" && status !== "REFUNDED") return "already_paid";
+    if (cur.status !== status) log.log?.(`[pedido ${orderNumber(cur.id)}] ${cur.status} → ${status}`);
     db.prepare(
       `UPDATE orders SET status=?, provider_payment_id=COALESCE(?,provider_payment_id),
        paid_at=CASE WHEN ?='PAID' THEN COALESCE(?,?) ELSE paid_at END, last_error=?, updated_at=? WHERE id=?`,
@@ -347,10 +348,36 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     return toView(o, verification);
   }
 
+  const pendingOrders = db.prepare(
+    `SELECT * FROM orders WHERE status IN ('AWAITING_PAYMENT','IN_ANALYSIS') AND created_at >= ? AND last_checked_at < ?
+     ORDER BY id DESC LIMIT ?`,
+  );
+
+  /**
+   * Confere no Mercado Pago os pedidos ainda pendentes. Garante a confirmação mesmo sem webhook
+   * e sem o cliente voltar para /pedido (ex.: pagou o Pix no app do banco e fechou a página).
+   */
+  async function reconcilePending({ maxAgeMs = 7 * 24 * 3600_000, minIntervalMs = 30_000, limit = 20 } = {}) {
+    if (!mp.configured) return 0;
+    const rows = pendingOrders.all(new Date(now() - maxAgeMs).toISOString(), now() - minIntervalMs, limit);
+    let checked = 0;
+    for (const o of rows) {
+      db.prepare("UPDATE orders SET last_checked_at=? WHERE id=?").run(now(), o.id);
+      try {
+        await reconcile(o);
+        checked++;
+      } catch (err) {
+        log.error(`[pedido ${orderNumber(o.id)}] conferência falhou: ${err.message}`);
+        if (retryable(err)) break; // Mercado Pago fora do ar: tenta de novo na próxima rodada
+      }
+    }
+    return checked;
+  }
+
   const listOrders = () =>
     db.prepare("SELECT * FROM orders ORDER BY id DESC LIMIT 200").all().map((o) => ({
       ...toView(o), publicId: undefined, paymentId: o.provider_payment_id, lastError: o.last_error,
     }));
 
-  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, priceCart };
+  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, reconcilePending, priceCart };
 }

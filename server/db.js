@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS orders (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   public_id           TEXT NOT NULL UNIQUE,   -- token imprevisível usado na URL/consulta
-  reference_id        TEXT NOT NULL UNIQUE,   -- enviado ao PagBank como reference_id
+  reference_id        TEXT NOT NULL UNIQUE,   -- enviado ao Mercado Pago como external_reference
   idempotency_key     TEXT UNIQUE,
   user_id             TEXT,                   -- reservado: o site ainda não tem login
   status              TEXT NOT NULL,          -- CREATED|AWAITING_PAYMENT|IN_ANALYSIS|PAID|DECLINED|CANCELED|EXPIRED|ERROR|VERIFICATION_ERROR

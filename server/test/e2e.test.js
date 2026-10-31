@@ -96,7 +96,7 @@ async function setup(extraEnv = {}) {
     server.close();
     mock.server.close();
   };
-  return { api, db, mock, config, close, base };
+  return { api, db, mock, config, close, base, app };
 }
 
 const key = () => crypto.randomBytes(16).toString("hex");
@@ -295,6 +295,31 @@ test("sem webhook (credenciais de teste): a página /pedido confirma sozinha pel
     put(t, payment("referencia-de-outro-pedido", "approved", 559.9));
     t.db.prepare("UPDATE orders SET last_checked_at=0").run();
     assert.equal((await view(t, o2.publicId)).status, "AWAITING_PAYMENT");
+  } finally {
+    t.close();
+  }
+});
+
+test("cliente pagou e fechou a página: o admin e a rotina confirmam o pedido sozinhos", async () => {
+  const t = await setup();
+  try {
+    const o = await newOrder(t);
+    put(t, payment(o.publicId, "approved", 1799.8));
+    t.db.prepare("UPDATE orders SET last_checked_at=0").run();
+    const list = await t.api("GET", "/api/admin/orders", undefined, await adminCookie(t));
+    assert.equal(list.status, 200);
+    assert.equal(t.db.prepare("SELECT status FROM orders WHERE public_id=?").get(o.publicId).status, "PAID");
+    // a rotina periódica também confirma (pedido novo, sem ninguém abrir nada)
+    const o2 = await newOrder(t, [{ productId: "stealth-tf", size: 40, quantity: 1 }]);
+    put(t, payment(o2.publicId, "approved", 559.9));
+    t.db.prepare("UPDATE orders SET last_checked_at=0").run();
+    await t.app.locals.orders.reconcilePending();
+    assert.equal(t.db.prepare("SELECT status FROM orders WHERE public_id=?").get(o2.publicId).status, "PAID");
+    // pendente sem pagamento continua pendente
+    const o3 = await newOrder(t, [{ productId: "stealth-tf", size: 41, quantity: 1 }]);
+    t.db.prepare("UPDATE orders SET last_checked_at=0").run();
+    await t.app.locals.orders.reconcilePending();
+    assert.equal(t.db.prepare("SELECT status FROM orders WHERE public_id=?").get(o3.publicId).status, "AWAITING_PAYMENT");
   } finally {
     t.close();
   }
