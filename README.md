@@ -30,10 +30,9 @@ npm run test:whatsapp    # cria um pedido pago de teste para ver o fluxo do What
 | Variável | Para quê |
 |---|---|
 | `MP_ACCESS_TOKEN` | Access Token da aplicação no Mercado Pago (credenciais de teste em desenvolvimento). Fica só no servidor. |
-| `MP_ENV` | `sandbox` (padrão) ou `production`. |
+| `MP_ENV` | `sandbox` (padrão, credenciais de teste) ou `production`. É só um rótulo: o que define teste ou cobrança real é o Access Token usado. |
 | `MP_WEBHOOK_SECRET` | Assinatura secreta das notificações (painel do Mercado Pago, em Webhooks). |
 | `MP_REQUIRE_SIGNATURE` | `true` (padrão) descarta avisos sem assinatura válida. |
-| `MP_USE_SANDBOX_CHECKOUT` | `true` usa o link de sandbox do checkout (só com `MP_ENV=sandbox`). |
 | `WEBHOOK_BASE_URL` | URL pública https que o Mercado Pago alcança. Em desenvolvimento use um túnel (`ngrok http 3001`). |
 | `PUBLIC_URL` | Endereço do site, para onde o Mercado Pago devolve o cliente. |
 | `WHATSAPP_NUMBER` | Número da loja, só dígitos, com país e DDD: `55DDDNUMERO`. |

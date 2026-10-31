@@ -11,3 +11,4 @@ dist-ssr
 !.env.example
 data/
 *.tsbuildinfo
+.mp-integrate-progress.md

@@ -193,12 +193,12 @@ test("pedido: preço vem do servidor, preferência correta, validações e idemp
   }
 });
 
-test("site em https: auto_return; sandbox opcional usa sandbox_init_point; webhook localhost não é enviado", async () => {
+test("site em https: auto_return; sempre usa init_point; webhook localhost não é enviado", async () => {
   const t = await setup({ PUBLIC_URL: "https://loja.example.com", WEBHOOK_BASE_URL: "", MP_USE_SANDBOX_CHECKOUT: "true" });
   try {
     const r = await newOrder(t);
     assert.equal(t.mock.state.lastBody.auto_return, "approved");
-    assert.match(r.payUrl, /sandbox-pay/);
+    assert.match(r.payUrl, /\/pay\?pref=/); // sandbox_init_point é ignorado mesmo se configurado
   } finally {
     t.close();
   }

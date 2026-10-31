@@ -140,7 +140,8 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
 
     try {
       const res = await mp.createPreference(payload);
-      const href = config.mpEnv === "sandbox" && config.useSandboxCheckout && res?.sandbox_init_point ? res.sandbox_init_point : res?.init_point;
+      // O Mercado Pago não tem mais ambiente sandbox: teste e produção usam o init_point (muda só a credencial).
+      const href = res?.init_point;
       const payUrl = href && safePayUrl(href);
       if (!res?.id || !PREFERENCE_ID_RE.test(String(res.id)) || !payUrl) throw new MercadoPagoError("Resposta de checkout inesperada");
       db.prepare(

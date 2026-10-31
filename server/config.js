@@ -33,8 +33,6 @@ export function loadConfig(env = process.env) {
     mpBaseUrl: strip(env.MP_BASE_URL || "https://api.mercadopago.com"),
     mpWebhookSecret: env.MP_WEBHOOK_SECRET || "",
     requireSignature: env.MP_REQUIRE_SIGNATURE !== "false",
-    // Em sandbox, abre o checkout de teste (sandbox_init_point) quando o Mercado Pago o devolve.
-    useSandboxCheckout: env.MP_USE_SANDBOX_CHECKOUT === "true",
     payHostAllowlist: (env.MP_PAY_HOSTS || "").split(",").map((s) => s.trim()).filter(Boolean),
     whatsappNumber: (env.WHATSAPP_NUMBER || "").replace(/\D/g, ""),
     adminPassword: env.ADMIN_PASSWORD || "",
