@@ -6,14 +6,14 @@ import { fileURLToPath } from "node:url";
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Carrega o .env (se existir) sem sobrescrever variáveis já definidas. */
-export function loadDotEnv(file = path.join(ROOT, ".env")) {
+export function loadDotEnv(file = path.join(ROOT, ".env"), target = process.env) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (!m || m[1] in process.env) continue;
-    let v = m[2];
-    if (/^(["']).*\1$/.test(v)) v = v.slice(1, -1);
-    process.env[m[1]] = v;
+    if (!m || m[1] in target) continue;
+    // Valor entre aspas: usa o conteúdo das aspas (pode ter "#"). Sem aspas: " # ..." no fim é comentário.
+    const quoted = m[2].match(/^(["'])(.*?)\1(?:\s+#.*)?$/);
+    target[m[1]] = quoted ? quoted[2] : m[2].replace(/\s+#.*$/, "");
   }
 }
 

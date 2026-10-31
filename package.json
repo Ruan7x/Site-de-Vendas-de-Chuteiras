@@ -11,7 +11,7 @@
     "dev:client": "vite",
     "dev:server": "node --watch server/index.js",
     "start": "node server/index.js",
-    "test:server": "node --test server/test/e2e.test.js",
+    "test:server": "node --test server/test/e2e.test.js server/test/env.test.js",
     "test:whatsapp": "node scripts/test-whatsapp.mjs"
   },
   "dependencies": {
