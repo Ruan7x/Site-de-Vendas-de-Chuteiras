@@ -17,18 +17,28 @@ type CartContextValue = {
 const CartContext = createContext<CartContextValue | null>(null);
 const STORAGE_KEY = "tn-sports-cart";
 
+const isLine = (v: unknown): v is CartLine =>
+  !!v &&
+  typeof v === "object" &&
+  typeof (v as CartLine).id === "string" &&
+  Number.isInteger((v as CartLine).size) &&
+  Number.isInteger((v as CartLine).qty) &&
+  (v as CartLine).qty > 0;
+
+function readSaved(): CartLine[] {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter(isLine) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function CartProvider({ children }: { children: ReactNode }) {
   const { products } = useProducts();
-  const [lines, setLines] = useState<CartLine[]>([]);
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) setLines(JSON.parse(raw) as CartLine[]);
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  // Lê a sacola salva já no primeiro render. Antes ela era lida num efeito, depois de o efeito de
+  // salvar ter gravado a sacola vazia, e recarregar a página (ou o modo dev do React) a apagava.
+  const [lines, setLines] = useState<CartLine[]>(readSaved);
 
   useEffect(() => {
     try {
@@ -37,6 +47,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
   }, [lines]);
+
+  // Mantém a sacola igual entre abas abertas do site (ex.: a aba do pedido e outra do catálogo).
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY) setLines(readSaved());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const value = useMemo<CartContextValue>(() => {
     const detailed = lines
