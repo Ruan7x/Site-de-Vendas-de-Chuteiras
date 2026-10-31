@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, Truck, ShieldCheck, RefreshCcw, CreditCard } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import heroBoot from "@/assets/hero-boot.jpg";
 import storyFounder from "@/assets/story-founder.jpg";
 import { FeedbackSection } from "@/components/feedback-section";
@@ -8,13 +8,6 @@ import { ProductCard } from "@/components/product-card";
 import { Reveal } from "@/components/reveal";
 import { categories, formatPrice } from "@/lib/products";
 import { useProducts } from "@/lib/products-store";
-
-const benefits = [
-  { icon: Truck, title: "Frete grátis", text: "Em compras acima de R$ 499" },
-  { icon: CreditCard, title: "12x sem juros", text: "No cartão de crédito" },
-  { icon: RefreshCcw, title: "Troca fácil", text: "30 dias para trocar o tamanho" },
-  { icon: ShieldCheck, title: "Original", text: "Garantia de 6 meses" },
-];
 
 export default function Home() {
   const { products } = useProducts();
@@ -82,20 +75,6 @@ export default function Home() {
               </div>
             </Link>
           )}
-        </div>
-      </section>
-
-      <section className="bg-primary text-primary-foreground">
-        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-x-4 gap-y-6 px-4 py-7 sm:px-6 lg:grid-cols-4">
-          {benefits.map(({ icon: Icon, title, text }) => (
-            <div key={title} className="flex items-center gap-3">
-              <Icon className="size-7 shrink-0" strokeWidth={1.75} />
-              <div>
-                <p className="font-display text-lg leading-none">{title}</p>
-                <p className="mt-1 text-xs font-medium opacity-80 sm:text-sm">{text}</p>
-              </div>
-            </div>
-          ))}
         </div>
       </section>
 

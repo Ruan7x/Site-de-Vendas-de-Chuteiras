@@ -107,11 +107,11 @@ export default function ProductDetail() {
               size="xl"
               onClick={() => {
                 if (!size) {
-                  toast.error("Selecione um tamanho antes de adicionar.");
+                  toast.error("Escolha o tamanho", { description: "Selecione um tamanho antes de adicionar à sacola." });
                   return;
                 }
                 add(product.id, size);
-                toast.success(`${product.name} (tam. ${size}) na sacola!`);
+                toast.success("Adicionado à sacola", { description: `${product.name} · Tam. ${size}` });
               }}
             >
               Adicionar à sacola
