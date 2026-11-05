@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { openDb } from "../db.js";
-import { createApp } from "../app.js";
+import { createApp, withProductPreview } from "../app.js";
 import { createMercadoPagoClient, verifySignature } from "../mercadopago.js";
 import { loadConfig } from "../config.js";
 
@@ -258,7 +258,7 @@ test("pagamento aprovado: confirma pela API, libera WhatsApp com a mensagem corr
     assert.equal(u.origin + u.pathname, "https://wa.me/5565999998888");
     const msg = u.searchParams.get("text");
     assert.match(msg, /Pedido: #TN-00001/);
-    assert.match(msg, /2x Velocity FG \(Tam\. 40\)/);
+    assert.match(msg, /• 2x Velocity FG – .+ \(Tam\. 40\)\n {3}Foto do modelo: http:\/\/localhost:5173\/produtos\/velocity-fg/);
     assert.match(msg, /Valor total: R\$ 1\.799,80/);
     assert.match(msg, /Pagamento: aprovado pelo Mercado Pago/);
     assert.equal(t.db.prepare("SELECT provider_payment_id p FROM orders").get().p, String(pay.id));
@@ -599,4 +599,29 @@ test("sem MP_ACCESS_TOKEN o checkout fica desativado (sem simulação)", async (
   const wh = await fetch(`http://127.0.0.1:${s.address().port}/api/webhooks/mercadopago?data.id=1&type=payment`, { method: "POST", body: "{}" });
   assert.equal(wh.status, 503);
   s.close();
+});
+
+test("página do produto: prévia do link (Open Graph) com foto, nome e preço do modelo", () => {
+  const html = `<html><head>
+    <title>TN Sports</title>
+    <meta property="og:title" content="TN Sports" />
+    <meta
+      property="og:description"
+      content="genérico"
+    />
+  </head><body></body></html>`;
+  const out = withProductPreview(
+    html,
+    { id: "velocity-fg", name: 'Velocity "FG"', colorway: "Branco / Laranja", category: "Campo", price: 899.9, image: "/products/velocity-fg.jpg" },
+    "https://loja.example.com",
+  );
+  assert.match(out, /<meta property="og:image" content="https:\/\/loja\.example\.com\/products\/velocity-fg\.jpg" \/>/);
+  assert.match(out, /<meta property="og:url" content="https:\/\/loja\.example\.com\/produtos\/velocity-fg" \/>/);
+  assert.match(out, /<title>Velocity &quot;FG&quot; – Branco \/ Laranja \| TN Sports<\/title>/);
+  assert.match(out, /R\$\s899,90/);
+  assert.doesNotMatch(out, /genérico/); // metatags genéricas trocadas, sem duplicar
+  assert.equal(out.match(/og:title/g).length, 1);
+  // imagem já absoluta (ex.: URL externa) é mantida
+  const ext = withProductPreview(html, { id: "x", name: "X", colorway: "Y", category: "Society", price: 1, image: "https://cdn.example.com/a.jpg" }, "https://loja.example.com");
+  assert.match(ext, /content="https:\/\/cdn\.example\.com\/a\.jpg"/);
 });

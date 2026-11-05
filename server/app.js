@@ -46,6 +46,31 @@ const slugify = (v) =>
   v.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "").slice(0, 60);
 const validImageRef = (s) => (s.startsWith("/") && !s.startsWith("//")) || /^https:\/\//.test(s);
 
+const escapeAttr = (s) =>
+  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/** Troca título e metatags Open Graph do index.html pelos dados do produto. */
+export function withProductPreview(html, product, publicUrl) {
+  const abs = (u) => (/^https?:\/\//.test(u) ? u : `${publicUrl}${u.startsWith("/") ? "" : "/"}${u}`);
+  const title = `${product.name} – ${product.colorway} | TN Sports`;
+  const price = product.price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const desc = `Chuteira ${product.category} ${product.name}, ${product.colorway}. ${price}.`;
+  const tags = [
+    ["og:title", title],
+    ["og:description", desc],
+    ["og:type", "product"],
+    ["og:url", `${publicUrl}/produtos/${encodeURIComponent(product.id)}`],
+    ["og:image", abs(product.image)],
+    ["og:image:alt", `Chuteira ${product.name} na cor ${product.colorway}`],
+  ]
+    .map(([k, v]) => `<meta property="${k}" content="${escapeAttr(v)}" />`)
+    .join("\n    ");
+  return html
+    .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeAttr(title)}</title>`)
+    .replace(/\s*<meta\s+property="og:[^"]*"[\s\S]*?\/>/g, "")
+    .replace("</head>", `    ${tags}\n    <meta name="twitter:image" content="${escapeAttr(abs(product.image))}" />\n  </head>`);
+}
+
 export function createApp({ db, config, mp, log = console }) {
   const app = express();
   app.disable("x-powered-by");
@@ -237,9 +262,14 @@ export function createApp({ db, config, mp, log = console }) {
   app.use("/uploads", express.static(config.uploadsDir, { maxAge: "7d", fallthrough: false, index: false }));
   if (fs.existsSync(config.distDir)) {
     app.use(express.static(config.distDir, { index: false, maxAge: "1h" }));
+    const indexHtml = fs.readFileSync(path.join(config.distDir, "index.html"), "utf8");
     app.use((req, res, next) => {
       if (req.method !== "GET") return next();
-      res.sendFile(path.join(config.distDir, "index.html"));
+      // Na página de um produto, a prévia do link (WhatsApp, redes sociais) mostra a foto e o nome dele.
+      const m = /^\/produtos\/([^/]+)\/?$/.exec(req.path);
+      const p = m ? db.prepare("SELECT * FROM products WHERE id=?").get(decodeURIComponent(m[1])) : null;
+      res.type("html").setHeader("Cache-Control", "no-cache");
+      res.send(p ? withProductPreview(indexHtml, productToApi(p), config.publicUrl) : indexHtml);
     });
   }
 

@@ -294,11 +294,18 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
   // ---------- visão pública ----------
   function whatsappUrl(o) {
     if (o.status !== "PAID" || !/^55\d{10,11}$/.test(config.whatsappNumber)) return null;
+    // O link do WhatsApp só aceita texto: a foto chega pela prévia do link de cada modelo
+    // (a página do produto tem og:image, montada em app.js). O WhatsApp mostra a prévia do 1º link.
     const items = JSON.parse(o.items_json)
-      .map((i) => `${i.quantity}x ${i.name} (Tam. ${i.size})`)
-      .join("; ");
+      .map((i) => {
+        const p = q.product.get(i.productId);
+        const color = p?.colorway ? ` – ${p.colorway}` : "";
+        const link = p ? `\n   Foto do modelo: ${config.publicUrl}/produtos/${encodeURIComponent(p.id)}` : "";
+        return `• ${i.quantity}x ${i.name}${color} (Tam. ${i.size})${link}`;
+      })
+      .join("\n");
     const msg =
-      `Olá, TN Sports! Realizei uma compra pelo site.\n\nPedido: #${orderNumber(o.id)}\nItens: ${items}\n` +
+      `Olá, TN Sports! Realizei uma compra pelo site.\n\nPedido: #${orderNumber(o.id)}\n\nItens:\n${items}\n\n` +
       `Valor total: ${formatBRL(o.total_cents)}\nPagamento: aprovado pelo Mercado Pago\n\nGostaria de confirmar os detalhes da entrega.`;
     return `https://wa.me/${config.whatsappNumber}?text=${encodeURIComponent(msg)}`;
   }
