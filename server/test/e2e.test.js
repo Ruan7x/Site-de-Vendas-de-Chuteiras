@@ -543,7 +543,12 @@ test("feedback: valida, grava com modelo e fotos, antispam; fotos só o admin v�
     let last;
     for (let i = 0; i < 6; i++) last = await t.api("POST", "/api/feedback", { ...ok, comment: `comentario ${i} longo` });
     assert.equal(last.status, 429);
-    assert.equal((await t.api("GET", "/api/feedback")).status, 404);
+    // a lista pública existe, mas nunca mostra e-mail
+    const pub = await t.api("GET", "/api/feedback?limit=24");
+    assert.equal(pub.status, 200);
+    assert.ok(pub.json.reviews.length > 0);
+    assert.ok(pub.json.reviews.every((r) => !("email" in r)));
+    assert.ok(!JSON.stringify(pub.json).includes("@exemplo.com"));
   } finally {
     t.close();
   }
@@ -866,4 +871,56 @@ test("estado do pedido: Pix válido vale mais que tentativa anterior recusada/ve
   assert.equal(derivePaymentState([old, exp], 10000).status, "EXPIRED"); // sem nada em andamento: vale o mais recente
   assert.equal(derivePaymentState([pix, { ...base, id: 4, status: "in_process" }], 10000).status, "IN_ANALYSIS");
   assert.equal(derivePaymentState([exp, { ...base, id: 5, status: "approved" }], 10000).status, "PAID");
+});
+
+test("avaliações públicas: aparecem para todos sem e-mail; admin oculta (some com as fotos) e exclui", async () => {
+  const t = await setup();
+  try {
+    const send = (extra) =>
+      t.api("POST", "/api/feedback", { rating: 5, comment: "Chuteira excelente, chegou rápido!", elapsedMs: 5000, ...extra });
+    const mine = await send({ name: "Thiago", email: "t@exemplo.com", model: "Velocity FG", images: [png()] });
+    assert.equal(mine.status, 201);
+    const r = mine.json.review;
+    assert.equal(r.name, "Thiago");
+    assert.equal(r.model, "Velocity FG");
+    assert.equal(r.email, undefined); // e-mail nunca sai
+    assert.match(r.images[0], /^\/api\/feedback-images\/[0-9a-f]{24}\.png$/);
+    await t.api("POST", "/api/feedback", { rating: 3, comment: "Bom, mas poderia ter mais tamanhos.", elapsedMs: 5000 }, { "x-forwarded-for": "1.2.3.4" });
+
+    const list = await t.api("GET", "/api/feedback?limit=1");
+    assert.equal(list.status, 200);
+    assert.equal(list.json.reviews.length, 1);
+    assert.equal(list.json.hasMore, true);
+    assert.equal(list.json.summary.count, 2);
+    assert.equal(list.json.summary.average, 4);
+    assert.ok(!JSON.stringify(list.json).includes("t@exemplo.com"));
+    const all = (await t.api("GET", "/api/feedback")).json.reviews;
+    assert.equal(all.length, 2);
+    assert.equal(all.find((x) => x.name === null).comment, "Bom, mas poderia ter mais tamanhos."); // sem nome: null
+
+    // foto pública enquanto a avaliação está visível
+    const img = await fetch(t.base + r.images[0]);
+    assert.equal(img.status, 200);
+    assert.equal(img.headers.get("x-content-type-options"), "nosniff");
+    assert.equal((await fetch(`${t.base}/api/feedback-images/../../etc/passwd`)).status, 404);
+    assert.equal((await fetch(`${t.base}/api/feedback-images/${"a".repeat(24)}.png`)).status, 404);
+
+    // moderação
+    assert.equal((await t.api("PATCH", `/api/admin/feedback/${r.id}`, { hidden: true })).status, 401);
+    const cookie = await adminCookie(t);
+    assert.equal((await t.api("PATCH", `/api/admin/feedback/${r.id}`, { hidden: true }, cookie)).status, 200);
+    assert.equal((await t.api("GET", "/api/feedback")).json.summary.count, 1);
+    assert.equal((await fetch(t.base + r.images[0])).status, 404); // oculta: foto sai do ar
+    const adminList = (await t.api("GET", "/api/admin/feedback", undefined, cookie)).json.feedback;
+    assert.equal(adminList.find((x) => x.id === r.id).hidden, true);
+    // excluir apaga a avaliação e o arquivo da foto
+    const file = path.join(t.config.feedbackDir, r.images[0].split("/").pop());
+    assert.ok(fs.existsSync(file));
+    assert.equal((await t.api("DELETE", `/api/admin/feedback/${r.id}`, undefined, cookie)).status, 200);
+    await new Promise((res) => setTimeout(res, 50));
+    assert.ok(!fs.existsSync(file));
+    assert.equal((await t.api("GET", "/api/admin/feedback", undefined, cookie)).json.feedback.length, 1);
+  } finally {
+    t.close();
+  }
 });

@@ -8,6 +8,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { useProducts } from "@/lib/products-store";
 import { compressImage } from "@/lib/image";
+import { ReviewsList, type Review } from "@/components/reviews-list";
+import { rememberMine } from "@/lib/my-reviews";
 
 const MAX_IMAGES = 3;
 const OTHER = "__outro__";
@@ -46,6 +48,7 @@ export function FeedbackSection() {
   const [errors, setErrors] = useState<Errors>({});
   const [sending, setSending] = useState(false);
   const [done, setDone] = useState(false);
+  const [latest, setLatest] = useState<Review | null>(null);
 
   const active = hover || rating;
 
@@ -84,10 +87,14 @@ export function FeedbackSection() {
     setErrors({});
     setSending(true);
     try {
-      await api("/api/feedback", {
+      const res = await api<{ ok: boolean; review?: Review | null }>("/api/feedback", {
         method: "POST",
         json: { ...parsed.data, images, website, elapsedMs: Date.now() - mountedAt.current },
       });
+      if (res.review) {
+        rememberMine(res.review.id);
+        setLatest(res.review);
+      }
       setRating(0);
       setHover(0);
       setName("");
@@ -132,7 +139,7 @@ export function FeedbackSection() {
               <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-primary" />
               <p>
                 <strong className="font-semibold text-primary">Feedback enviado com sucesso!</strong> Obrigado por nos
-                ajudar a melhorar.
+                ajudar a melhorar. Sua avaliação já aparece logo abaixo.
               </p>
             </div>
           )}
@@ -283,7 +290,11 @@ export function FeedbackSection() {
             </p>
           )}
 
-          <Button type="submit" variant="volt" size="xl" className="mt-6 w-full uppercase" disabled={sending}>
+          <p className="mt-6 text-xs text-muted-foreground">
+            Sua avaliação (nome, estrelas, comentário, modelo e fotos) fica visível para outros clientes no site. O e-mail
+            não é publicado.
+          </p>
+          <Button type="submit" variant="volt" size="xl" className="mt-4 w-full uppercase" disabled={sending}>
             {sending ? (
               <>
                 <Loader2 className="animate-spin" /> Enviando…
@@ -293,6 +304,8 @@ export function FeedbackSection() {
             )}
           </Button>
         </form>
+
+        <ReviewsList latest={latest} />
       </div>
     </section>
   );

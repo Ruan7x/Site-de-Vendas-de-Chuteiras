@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS feedback (
   model      TEXT,                            -- modelo de chuteira comprado
   images     TEXT NOT NULL DEFAULT '[]',      -- JSON: nomes dos arquivos enviados
   ip_hash    TEXT,
+  hidden     INTEGER NOT NULL DEFAULT 0,       -- 1 = ocultada pelo admin (não aparece no site)
   created_at TEXT NOT NULL
 );
 `;
@@ -105,6 +106,8 @@ function migrate(db) {
     ["pix_expires_at", "TEXT"], ["pix_attempt", "INTEGER NOT NULL DEFAULT 0"], ["payer_email", "TEXT"],
   ])
     if (!oc.includes(col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${type}`);
+  if (!columns(db, "feedback").includes("hidden"))
+    db.exec("ALTER TABLE feedback ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
   if (!columns(db, "products").includes("colors"))
     db.exec("ALTER TABLE products ADD COLUMN colors TEXT NOT NULL DEFAULT '[]'");
   if (!columns(db, "orders").includes("manual_status"))

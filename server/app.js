@@ -85,6 +85,17 @@ export function withProductPreview(html, product, publicUrl, colorName) {
     .replace("</head>", `    ${tags}\n    <meta name="twitter:image" content="${escapeAttr(abs(imageUrl))}" />\n  </head>`);
 }
 
+/** Avaliação como aparece no site: sem e-mail, IP ou outros dados internos. */
+export const publicReview = (r) => ({
+  id: r.id,
+  name: r.name || null,
+  rating: r.rating,
+  comment: r.comment,
+  model: r.model || null,
+  images: JSON.parse(r.images || "[]").map((n) => `/api/feedback-images/${n}`),
+  createdAt: r.created_at,
+});
+
 export function createApp({ db, config, mp, log = console }) {
   const app = express();
   app.disable("x-powered-by");
@@ -127,16 +138,19 @@ export function createApp({ db, config, mp, log = console }) {
     const ipHash = sha256Hex(`${req.ip}|${config.sessionSecret}`).slice(0, 32);
     const comment = clean(d.comment);
     const dup = db
-      .prepare("SELECT 1 FROM feedback WHERE ip_hash=? AND comment=? AND created_at > ?")
+      .prepare("SELECT * FROM feedback WHERE ip_hash=? AND comment=? AND created_at > ?")
       .get(ipHash, comment, new Date(Date.now() - 86_400_000).toISOString());
+    let row = dup;
     if (!dup) {
       const names = decoded.map((img) => writeImage(img, config.feedbackDir));
-      db.prepare("INSERT INTO feedback (rating,comment,name,email,model,images,ip_hash,created_at) VALUES (?,?,?,?,?,?,?,?)").run(
+      const r = db.prepare("INSERT INTO feedback (rating,comment,name,email,model,images,ip_hash,created_at) VALUES (?,?,?,?,?,?,?,?)").run(
         d.rating, comment, clean(d.name) || null, clean(d.email) || null, clean(d.model) || null,
         JSON.stringify(names), ipHash, new Date().toISOString(),
       );
+      row = db.prepare("SELECT * FROM feedback WHERE id=?").get(r.lastInsertRowid);
     }
-    res.status(201).json({ ok: true });
+    // devolve a avaliação como ela aparece no site, para a pessoa já ver a dela na lista
+    res.status(201).json({ ok: true, review: row && !row.hidden ? publicReview(row) : null });
   });
 
   // ---------- admin (sessão assinada em cookie HttpOnly) ----------
@@ -246,16 +260,33 @@ export function createApp({ db, config, mp, log = console }) {
   });
   admin.get("/feedback", (req, res) => {
     const rows = db
-      .prepare("SELECT id,rating,comment,name,email,model,images,created_at AS createdAt FROM feedback ORDER BY id DESC LIMIT 500")
+      .prepare("SELECT id,rating,comment,name,email,model,images,hidden,created_at AS createdAt FROM feedback ORDER BY id DESC LIMIT 500")
       .all();
     res.json({
-      feedback: rows.map(({ images, ...r }) => ({
+      feedback: rows.map(({ images, hidden, ...r }) => ({
         ...r,
+        hidden: hidden === 1,
         images: JSON.parse(images || "[]").map((n) => `/api/admin/feedback-images/${n}`),
       })),
     });
   });
-  // Fotos dos clientes: só o admin autenticado vê (nome validado contra path traversal).
+  // Moderação: ocultar/mostrar no site e excluir (apaga também as fotos)
+  admin.patch("/feedback/:id", (req, res) => {
+    const { hidden } = z.object({ hidden: z.boolean() }).parse(req.body);
+    const r = db.prepare("UPDATE feedback SET hidden=? WHERE id=?").run(hidden ? 1 : 0, Number(req.params.id));
+    if (!r.changes) throw new HttpError(404, "not_found", "Avaliação não encontrada.");
+    res.json({ ok: true, hidden });
+  });
+  admin.delete("/feedback/:id", (req, res) => {
+    const row = db.prepare("SELECT images FROM feedback WHERE id=?").get(Number(req.params.id));
+    if (!row) throw new HttpError(404, "not_found", "Avaliação não encontrada.");
+    db.prepare("DELETE FROM feedback WHERE id=?").run(Number(req.params.id));
+    for (const n of JSON.parse(row.images || "[]")) {
+      if (IMAGE_NAME_RE.test(n)) fs.rm(path.join(config.feedbackDir, n), { force: true }, () => {});
+    }
+    res.json({ ok: true });
+  });
+  // Fotos dos clientes no admin (inclui avaliações ocultas; nome validado contra path traversal).
   admin.get("/feedback-images/:name", (req, res) => {
     if (!IMAGE_NAME_RE.test(req.params.name)) throw new HttpError(404, "not_found", "Imagem não encontrada.");
     res.set({ "Cache-Control": "private, max-age=3600", "Content-Security-Policy": "default-src 'none'; sandbox" });
@@ -267,6 +298,30 @@ export function createApp({ db, config, mp, log = console }) {
 
   // ---------- público ----------
   app.use(express.json({ limit: "20kb" }));
+
+  // Avaliações publicadas (mais novas primeiro) + resumo; nunca expõe e-mail
+  app.get("/api/feedback", rl.orderRead, (req, res) => {
+    const limitN = Math.min(Math.max(Number.parseInt(String(req.query.limit ?? "6"), 10) || 6, 1), 24);
+    const offset = Math.max(Number.parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const rows = db.prepare("SELECT * FROM feedback WHERE hidden=0 ORDER BY id DESC LIMIT ? OFFSET ?").all(limitN + 1, offset);
+    const s = db.prepare("SELECT COUNT(*) AS count, AVG(rating) AS avg FROM feedback WHERE hidden=0").get();
+    res.set("Cache-Control", "no-store");
+    res.json({
+      reviews: rows.slice(0, limitN).map(publicReview),
+      hasMore: rows.length > limitN,
+      summary: { count: s.count, average: s.count ? Math.round(s.avg * 10) / 10 : 0 },
+    });
+  });
+  // Fotos públicas: só de avaliações visíveis (ocultar a avaliação esconde as fotos também)
+  app.get("/api/feedback-images/:name", rl.orderRead, (req, res) => {
+    const name = req.params.name;
+    const visible = IMAGE_NAME_RE.test(name) && db.prepare("SELECT 1 FROM feedback WHERE hidden=0 AND images LIKE ?").get(`%"${name}"%`);
+    if (!visible) return res.status(404).json({ error: "not_found", message: "Imagem não encontrada." });
+    res.set({ "Cache-Control": "public, max-age=3600", "Content-Security-Policy": "default-src 'none'; sandbox", "X-Content-Type-Options": "nosniff" });
+    res.sendFile(name, { root: config.feedbackDir, dotfiles: "deny" }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: "not_found", message: "Imagem não encontrada." });
+    });
+  });
 
   app.get("/api/health", (req, res) => res.json({ ok: true, payments: mp.configured, env: config.mpEnv }));
   app.get("/api/products", (req, res) => {

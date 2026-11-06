@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { ImagePlus, Lock, LogOut, Pencil, Plus, Star, Trash2, Upload, X } from "lucide-react";
+import { Eye, EyeOff, ImagePlus, Lock, LogOut, Pencil, Plus, Star, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -614,6 +614,7 @@ type AdminFeedbackRow = {
   email: string | null;
   model: string | null;
   images: string[];
+  hidden: boolean;
   createdAt: string;
 };
 
@@ -622,23 +623,79 @@ function AdminFeedback() {
   useEffect(() => {
     api<{ feedback: AdminFeedbackRow[] }>("/api/admin/feedback").then((r) => setRows(r.feedback)).catch(() => setRows([]));
   }, []);
+  const [toDelete, setToDelete] = useState<AdminFeedbackRow | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const toggleHidden = async (r: AdminFeedbackRow) => {
+    setBusy(r.id);
+    try {
+      await api(`/api/admin/feedback/${r.id}`, { method: "PATCH", json: { hidden: !r.hidden } });
+      setRows((prev) => prev?.map((x) => (x.id === r.id ? { ...x, hidden: !r.hidden } : x)) ?? prev);
+      toast.success(r.hidden ? "Avaliação visível no site" : "Avaliação ocultada do site");
+    } catch (e) {
+      toast.error("Não foi possível alterar", { description: e instanceof Error ? e.message : undefined });
+    }
+    setBusy(null);
+  };
+  const remove = async () => {
+    if (!toDelete) return;
+    setBusy(toDelete.id);
+    try {
+      await api(`/api/admin/feedback/${toDelete.id}`, { method: "DELETE" });
+      setRows((prev) => prev?.filter((x) => x.id !== toDelete.id) ?? prev);
+      toast.success("Avaliação excluída");
+      setToDelete(null);
+    } catch (e) {
+      toast.error("Não foi possível excluir", { description: e instanceof Error ? e.message : undefined });
+    }
+    setBusy(null);
+  };
+
   if (!rows) return <p className="mt-6 text-sm text-muted-foreground">Carregando…</p>;
   if (rows.length === 0) return <p className="mt-6 text-sm text-muted-foreground">Nenhuma avaliação ainda.</p>;
-  const avg = rows.reduce((s, r) => s + r.rating, 0) / rows.length;
+  const visible = rows.filter((r) => !r.hidden);
+  const avg = visible.length ? visible.reduce((s, r) => s + r.rating, 0) / visible.length : 0;
   return (
     <div className="mt-4 space-y-3">
       <p className="text-sm text-muted-foreground">
-        Média: <span className="font-display text-lg text-primary">{avg.toFixed(1)}</span> / 5 · {rows.length} avaliações
+        Média no site: <span className="font-display text-lg text-primary">{avg.toFixed(1)}</span> / 5 · {visible.length}{" "}
+        visíveis{rows.length > visible.length && ` · ${rows.length - visible.length} ocultas`}
       </p>
       {rows.map((r) => (
-        <div key={r.id} className="border border-border p-4">
+        <div key={r.id} className={`border p-4 ${r.hidden ? "border-dashed border-border opacity-60" : "border-border"}`}>
           <div className="flex items-center justify-between gap-2">
-            <span className="flex">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <Star key={n} className={`size-4 ${n <= r.rating ? "fill-primary text-primary" : "text-muted-foreground/40"}`} />
-              ))}
+            <span className="flex items-center gap-3">
+              <span className="flex">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Star key={n} className={`size-4 ${n <= r.rating ? "fill-primary text-primary" : "text-muted-foreground/40"}`} />
+                ))}
+              </span>
+              {r.hidden && <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Oculta no site</span>}
             </span>
-            <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleString("pt-BR")}</span>
+            <span className="flex items-center gap-1">
+              <span className="mr-2 hidden text-xs text-muted-foreground sm:inline">{new Date(r.createdAt).toLocaleString("pt-BR")}</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={busy === r.id}
+                aria-label={r.hidden ? "Mostrar no site" : "Ocultar do site"}
+                title={r.hidden ? "Mostrar no site" : "Ocultar do site"}
+                onClick={() => void toggleHidden(r)}
+              >
+                {r.hidden ? <Eye /> : <EyeOff />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={busy === r.id}
+                aria-label="Excluir avaliação"
+                title="Excluir avaliação"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => setToDelete(r)}
+              >
+                <Trash2 />
+              </Button>
+            </span>
           </div>
           {r.model && (
             <p className="mt-2 text-xs font-semibold uppercase tracking-wider text-primary">Modelo: {r.model}</p>
@@ -658,6 +715,31 @@ function AdminFeedback() {
           )}
         </div>
       ))}
+
+      <AlertDialog open={toDelete !== null} onOpenChange={(o) => !o && busy === null && setToDelete(null)}>
+        <AlertDialogContent className="bg-surface text-surface-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-display text-2xl">Excluir esta avaliação?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ela some do site e do painel, junto com as fotos. Isso não pode ser desfeito. Se quiser só tirar do site,
+              use o botão de ocultar.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy !== null}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy !== null}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault();
+                void remove();
+              }}
+            >
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

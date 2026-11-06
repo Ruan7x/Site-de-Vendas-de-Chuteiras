@@ -131,7 +131,8 @@ src/
 
 - O catálogo, os pedidos e as avaliações ficam em `data/tn-sports.db`. Faça backup dessa pasta, de
   `data/uploads/` e de `data/feedback-uploads/`.
-- As opiniões aceitam o modelo comprado e até 3 fotos (png, jpeg, webp ou gif, até 2,5 MB cada). As
-  fotos não são públicas: só o painel `/admin`, logado, consegue abri-las.
+- As avaliações aceitam o modelo comprado e até 3 fotos (png, jpeg, webp ou gif, até 2,5 MB cada) e
+  aparecem publicamente na página inicial (nome, estrelas, comentário, modelo e fotos; o e-mail nunca é
+  mostrado). No `/admin`, aba Avaliações, dá para ocultar do site ou excluir (com as fotos).
 - O frete não é cobrado no checkout; é combinado no WhatsApp após o pagamento.
 - Os limites de requisições ficam em memória, então valem para uma única instância do servidor.
