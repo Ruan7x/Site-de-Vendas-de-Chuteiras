@@ -29,17 +29,13 @@ export default function Home() {
         <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-background to-transparent" />
         <div className="relative mx-auto grid min-h-[88vh] max-w-7xl items-center gap-10 px-4 py-20 sm:px-6 lg:grid-cols-12">
           <div className="lg:col-span-7">
-            <span className="eyebrow skew-tag inline-block bg-primary px-3 py-1 text-primary-foreground">
-              Coleção 26/27
-            </span>
-            <h1 className="mt-6 text-6xl sm:text-8xl xl:text-9xl">
-              Velocidade
-              <br />
-              <span className="text-primary">sem desculpa</span>
+            <h1 className="text-5xl sm:text-7xl xl:text-8xl">
+              Domine cada toque.
+              <span className="mt-3 block text-primary">Sinta a diferença.</span>
             </h1>
             <p className="mt-7 max-w-lg text-base text-foreground/80 sm:text-lg">
-              Chuteiras desenvolvidas para campo e society. Cabedal leve, tração agressiva
-              e ajuste que responde no primeiro toque.
+              Desenvolvidas para máxima performance, nossas chuteiras acompanham seu ritmo dentro das
+              quatro linhas.
             </p>
             <div className="mt-10 flex flex-wrap gap-3">
               <Button asChild variant="volt" size="xl">
