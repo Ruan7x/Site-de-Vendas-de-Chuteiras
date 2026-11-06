@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Lock, LogOut, Pencil, Plus, Star, Trash2, Upload } from "lucide-react";
+import { ImagePlus, Lock, LogOut, Pencil, Plus, Star, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,6 +34,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { categories, formatPrice, type Category, type Product } from "@/lib/products";
 import { useProducts } from "@/lib/products-store";
 import { api } from "@/lib/api";
+import { compressImage } from "@/lib/image";
 
 const ALL_SIZES = Array.from({ length: 12 }, (_, i) => 34 + i); // 34..45
 
@@ -44,12 +45,16 @@ type FormState = {
   category: Category;
   price: string;
   oldPrice: string;
-  colorway: string;
+  /** `image` vazio = a cor usa a imagem principal; data URL = foto nova; caminho/URL = foto já salva. */
+  colors: { key: number; name: string; image: string }[];
   tag: string;
   description: string;
   sizes: number[];
   image: string;
 };
+
+let colorKey = 0;
+const newColor = (name = "", image = "") => ({ key: ++colorKey, name, image });
 
 const emptyForm: FormState = {
   id: "",
@@ -58,7 +63,7 @@ const emptyForm: FormState = {
   category: "Campo",
   price: "",
   oldPrice: "",
-  colorway: "",
+  colors: [],
   tag: "",
   description: "",
   sizes: [],
@@ -137,16 +142,29 @@ function ProductForm({
     }));
   };
 
-  const handleImageFile = (file: File | undefined) => {
-    if (!file) return;
+  // As fotos são reduzidas no navegador antes do envio (até 1600 px), para o upload ser rápido.
+  const readImage = async (file: File | undefined) => {
+    if (!file) return null;
     if (!file.type.startsWith("image/")) {
       toast.error("Selecione um arquivo de imagem válido.");
-      return;
+      return null;
     }
-    const reader = new FileReader();
-    reader.onload = () => set("image", reader.result as string);
-    reader.readAsDataURL(file);
+    try {
+      return await compressImage(file);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível ler a imagem.");
+      return null;
+    }
   };
+  const handleImageFile = async (file: File | undefined) => {
+    const data = await readImage(file);
+    if (data) set("image", data);
+  };
+
+  const updateColor = (key: number, patch: Partial<{ name: string; image: string }>) =>
+    setForm((prev) => ({ ...prev, colors: prev.colors.map((c) => (c.key === key ? { ...c, ...patch } : c)) }));
+  const removeColor = (key: number) => setForm((prev) => ({ ...prev, colors: prev.colors.filter((c) => c.key !== key) }));
+  const addColor = () => setForm((prev) => ({ ...prev, colors: [...prev.colors, newColor()] }));
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -155,6 +173,9 @@ function ProductForm({
       return toast.error("Informe um preço válido.");
     if (form.sizes.length === 0) return toast.error("Selecione ao menos um tamanho.");
     if (!form.image) return toast.error("Adicione uma imagem (upload ou URL).");
+    const names = form.colors.map((c) => c.name.trim()).filter(Boolean);
+    if (names.length !== form.colors.length) return toast.error("Dê um nome para cada cor (ou remova a cor vazia).");
+    if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) return toast.error("Há cores com o mesmo nome.");
     onSubmit(form);
   };
 
@@ -194,15 +215,6 @@ function ProductForm({
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="colorway">Cor</Label>
-          <Input
-            id="colorway"
-            value={form.colorway}
-            onChange={(e) => set("colorway", e.target.value)}
-            placeholder="Preto / Ouro"
-          />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="price">Preço (R$)</Label>
@@ -247,6 +259,71 @@ function ProductForm({
       </div>
 
       <div>
+        <div className="flex items-center justify-between gap-3">
+          <Label>Cores</Label>
+          <Button type="button" variant="onDark" size="sm" onClick={addColor} disabled={form.colors.length >= 12}>
+            <Plus /> Adicionar cor
+          </Button>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          O cliente escolhe entre estas cores. A primeira é a padrão. Cor sem foto usa a imagem principal.
+        </p>
+        <div className="mt-3 space-y-2">
+          {form.colors.length === 0 && (
+            <p className="border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+              Nenhuma cor cadastrada. Clique em “Adicionar cor”.
+            </p>
+          )}
+          {form.colors.map((c, i) => (
+            <div key={c.key} className="flex items-center gap-3 border border-border p-2">
+              <label
+                className="relative flex size-14 shrink-0 cursor-pointer items-center justify-center overflow-hidden border border-dashed border-input bg-secondary text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                title="Foto desta cor"
+              >
+                {c.image || form.image ? (
+                  <img src={c.image || form.image} alt="" className={`size-full object-cover ${c.image ? "" : "opacity-40"}`} />
+                ) : null}
+                {!c.image && <ImagePlus className="absolute size-5" />}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  aria-label={`Foto da cor ${c.name || i + 1}`}
+                  onChange={async (e) => {
+                    const data = await readImage(e.target.files?.[0]);
+                    if (data) updateColor(c.key, { image: data });
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <div className="min-w-0 flex-1">
+                <Input
+                  value={c.name}
+                  maxLength={40}
+                  onChange={(e) => updateColor(c.key, { name: e.target.value })}
+                  placeholder={i === 0 ? "Ex.: Preto / Ouro" : "Ex.: Branco / Azul"}
+                  aria-label={`Nome da cor ${i + 1}`}
+                />
+                <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
+                  {i === 0 && <span className="text-primary">Padrão</span>}
+                  {c.image ? (
+                    <button type="button" className="hover:text-foreground" onClick={() => updateColor(c.key, { image: "" })}>
+                      Usar imagem principal
+                    </button>
+                  ) : (
+                    <span>Usa a imagem principal</span>
+                  )}
+                </div>
+              </div>
+              <Button type="button" variant="ghost" size="icon" aria-label={`Remover cor ${c.name || i + 1}`} onClick={() => removeColor(c.key)}>
+                <X />
+              </Button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
         <Label>Tamanhos disponíveis (BR)</Label>
         <div className="mt-2 flex flex-wrap gap-2">
           {ALL_SIZES.map((s) => (
@@ -267,7 +344,7 @@ function ProductForm({
       </div>
 
       <div>
-        <Label>Imagem</Label>
+        <Label>Imagem principal</Label>
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start">
           <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden border border-border bg-secondary">
             {form.image ? (
@@ -282,7 +359,10 @@ function ProductForm({
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(e) => handleImageFile(e.target.files?.[0])}
+              onChange={(e) => {
+                void handleImageFile(e.target.files?.[0]);
+                e.target.value = "";
+              }}
             />
             <Button
               type="button"
@@ -322,7 +402,8 @@ function productToForm(p: Product): FormState {
     category: p.category,
     price: String(p.price),
     oldPrice: p.oldPrice ? String(p.oldPrice) : "",
-    colorway: p.colorway,
+    // foto igual à principal = a cor não tem foto própria
+    colors: (p.colors ?? []).map((c) => newColor(c.name, c.image === p.image ? "" : c.image)),
     tag: p.tag ?? "",
     description: p.description,
     sizes: p.sizes,
@@ -338,7 +419,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 type AdminOrder = {
   id: number; number: string; status: string; total: number; createdAt: string; paidAt: string | null;
-  items: { name: string; size: number; quantity: number }[]; paymentId: string | null; lastError: string | null;
+  items: { name: string; color?: string | null; size: number; quantity: number }[]; paymentId: string | null; lastError: string | null;
   manualStatus: boolean;
 };
 
@@ -438,7 +519,7 @@ function AdminOrders() {
             <TableRow key={o.id}>
               <TableCell className="font-display">{o.number}</TableCell>
               <TableCell className="text-xs text-muted-foreground">
-                {o.items.map((i) => `${i.quantity}x ${i.name} (${i.size})`).join(", ")}
+                {o.items.map((i) => `${i.quantity}x ${i.name}${i.color ? ` – ${i.color}` : ""} (${i.size})`).join(", ")}
               </TableCell>
               <TableCell>{formatPrice(o.total)}</TableCell>
               <TableCell>
@@ -545,7 +626,12 @@ function AdminPanel() {
       price: Number(data.price.replace(",", ".")),
       oldPrice: data.oldPrice ? Number(data.oldPrice.replace(",", ".")) : null,
       ...(isUpload ? { imageData: data.image } : { image: data.image }),
-      colorway: data.colorway.trim(),
+      colorway: data.colors[0]?.name.trim() ?? "",
+      colors: data.colors.map((c) =>
+        c.image.startsWith("data:")
+          ? { name: c.name.trim(), imageData: c.image }
+          : { name: c.name.trim(), image: c.image || null },
+      ),
       tag: data.tag.trim() || null,
       description: data.description.trim(),
       sizes: data.sizes,
@@ -638,7 +724,9 @@ function AdminPanel() {
                     />
                     <div>
                       <p className="font-display text-sm leading-tight">{p.name}</p>
-                      <p className="text-xs text-muted-foreground">{p.colorway}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {(p.colors?.length ?? 0) > 1 ? p.colors.map((c) => c.name).join(" · ") : p.colorway}
+                      </p>
                     </div>
                   </div>
                 </TableCell>

@@ -663,3 +663,70 @@ test("admin altera o status do pedido à mão (ex.: pagamento em dinheiro)", asy
     t.close();
   }
 });
+
+test("cores: admin cadastra cores com foto própria; cliente escolhe a cor e ela vai ao pedido, ao Mercado Pago e ao WhatsApp", async () => {
+  const t = await setup();
+  try {
+    const cookie = await adminCookie(t);
+    const created = await t.api(
+      "POST",
+      "/api/admin/products",
+      {
+        name: "Tri Color FG", category: "Campo", price: 300, sizes: [40, 41], imageData: png(),
+        colors: [{ name: "Preto / Ouro", imageData: png(64) }, { name: "Branco / Azul" }],
+      },
+      cookie,
+    );
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+    const prod = created.json;
+    assert.equal(prod.colorway, "Preto / Ouro");
+    assert.equal(prod.colors.length, 2);
+    assert.match(prod.colors[0].image, /^\/uploads\/[0-9a-f]{24}\.png$/);
+    assert.notEqual(prod.colors[0].image, prod.image);
+    assert.equal(prod.colors[1].image, prod.image); // sem foto própria: usa a principal
+    // nomes repetidos são recusados
+    const dup = await t.api("POST", "/api/admin/products", { name: "Dup", category: "Campo", price: 1, sizes: [40], imageData: png(), colors: [{ name: "Azul" }, { name: "azul" }] }, cookie);
+    assert.equal(dup.status, 422);
+    // editar mantendo a foto da cor (o painel reenvia o caminho já salvo)
+    const upd = await t.api("PUT", `/api/admin/products/${prod.id}`, { name: "Tri Color FG", category: "Campo", price: 300, sizes: [40, 41], image: prod.image, colors: [{ name: "Preto / Ouro", image: prod.colors[0].image }, { name: "Branco / Azul", image: prod.image }] }, cookie);
+    assert.equal(upd.status, 200);
+    assert.equal(upd.json.colors[0].image, prod.colors[0].image);
+    assert.equal(upd.json.colors[1].image, prod.image);
+
+    // produto com várias cores exige a cor; cor inexistente é recusada
+    const noColor = await t.api("POST", "/api/orders", { items: [{ productId: prod.id, size: 40, quantity: 1 }], idempotencyKey: key() });
+    assert.equal(noColor.status, 422);
+    assert.equal(noColor.json.error, "color_required");
+    const badColor = await t.api("POST", "/api/orders", { items: [{ productId: prod.id, size: 40, quantity: 1, color: "Rosa" }], idempotencyKey: key() });
+    assert.equal(badColor.json.error, "color_unavailable");
+
+    // cores diferentes do mesmo tamanho são itens separados
+    const o = await newOrder(t, [
+      { productId: prod.id, size: 40, quantity: 1, color: "Branco / Azul" },
+      { productId: prod.id, size: 40, quantity: 1, color: "Preto / Ouro" },
+    ]);
+    const titles = t.mock.state.lastBody.items.map((i) => i.title).sort();
+    assert.deepEqual(titles, ["Tri Color FG – Branco / Azul (Tam. 40)", "Tri Color FG – Preto / Ouro (Tam. 40)"]);
+    const row = t.db.prepare("SELECT id, items_json FROM orders WHERE public_id=?").get(o.publicId);
+    assert.deepEqual(JSON.parse(row.items_json).map((i) => i.color).sort(), ["Branco / Azul", "Preto / Ouro"]);
+
+    // marcado como pago: a mensagem traz a cor e o link da foto daquela cor
+    await t.api("PATCH", `/api/admin/orders/${row.id}/status`, { status: "PAID" }, cookie);
+    const v = await view(t, o.publicId);
+    assert.deepEqual(v.items.map((i) => i.color).sort(), ["Branco / Azul", "Preto / Ouro"]);
+    const msg = new URL(v.whatsappUrl).searchParams.get("text");
+    assert.match(msg, /• 1x Tri Color FG – Preto \/ Ouro \(Tam\. 40\)\n {3}Foto do modelo: http:\/\/localhost:5173\/produtos\/tri-color-fg\?cor=Preto%20%2F%20Ouro/);
+
+    // produto de uma cor só (antigo) continua funcionando sem enviar a cor
+    const single = await newOrder(t, [{ productId: "stealth-tf", size: 40, quantity: 1 }]);
+    const sRow = t.db.prepare("SELECT items_json FROM orders WHERE public_id=?").get(single.publicId);
+    assert.equal(JSON.parse(sRow.items_json)[0].color, "Preto Total");
+
+    // prévia do link com ?cor= mostra a foto da cor
+    const html = withProductPreview("<html><head><title>x</title></head></html>", upd.json, "https://loja.example.com", "Preto / Ouro");
+    assert.match(html, new RegExp(`og:image" content="https://loja\\.example\\.com${upd.json.colors[0].image.replace(/\./g, "\\.")}"`));
+    assert.match(html, /og:url" content="https:\/\/loja\.example\.com\/produtos\/tri-color-fg\?cor=Preto%20%2F%20Ouro"/);
+  } finally {
+    t.close();
+  }
+});

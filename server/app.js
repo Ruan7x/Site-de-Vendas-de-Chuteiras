@@ -22,6 +22,16 @@ const productSchema = z
     price: z.number().positive().max(99999),
     oldPrice: z.number().positive().max(99999).nullish(),
     colorway: z.string().trim().max(80).default(""),
+    colors: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1, "Dê um nome para cada cor.").max(40),
+          image: z.string().max(500).nullish(),
+          imageData: z.string().max(6_000_000).nullish(),
+        }),
+      )
+      .max(12)
+      .optional(),
     tag: z.string().trim().max(40).nullish(),
     description: z.string().trim().max(1000).default(""),
     sizes: z.array(z.number().int().min(20).max(60)).min(1).max(30),
@@ -50,25 +60,29 @@ const escapeAttr = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 /** Troca título e metatags Open Graph do index.html pelos dados do produto. */
-export function withProductPreview(html, product, publicUrl) {
+export function withProductPreview(html, product, publicUrl, colorName) {
   const abs = (u) => (/^https?:\/\//.test(u) ? u : `${publicUrl}${u.startsWith("/") ? "" : "/"}${u}`);
-  const title = `${product.name} – ${product.colorway} | TN Sports`;
+  // ?cor= na URL (ex.: link do WhatsApp) mostra a foto e o nome daquela cor
+  const color = product.colors?.find((c) => c.name === colorName);
+  const colorway = color?.name ?? product.colorway;
+  const imageUrl = color?.image ?? product.image;
+  const title = `${product.name} – ${colorway} | TN Sports`;
   const price = product.price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  const desc = `Chuteira ${product.category} ${product.name}, ${product.colorway}. ${price}.`;
+  const desc = `Chuteira ${product.category} ${product.name}, ${colorway}. ${price}.`;
   const tags = [
     ["og:title", title],
     ["og:description", desc],
     ["og:type", "product"],
-    ["og:url", `${publicUrl}/produtos/${encodeURIComponent(product.id)}`],
-    ["og:image", abs(product.image)],
-    ["og:image:alt", `Chuteira ${product.name} na cor ${product.colorway}`],
+    ["og:url", `${publicUrl}/produtos/${encodeURIComponent(product.id)}${color ? `?cor=${encodeURIComponent(color.name)}` : ""}`],
+    ["og:image", abs(imageUrl)],
+    ["og:image:alt", `Chuteira ${product.name} na cor ${colorway}`],
   ]
     .map(([k, v]) => `<meta property="${k}" content="${escapeAttr(v)}" />`)
     .join("\n    ");
   return html
     .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeAttr(title)}</title>`)
     .replace(/\s*<meta\s+property="og:[^"]*"[\s\S]*?\/>/g, "")
-    .replace("</head>", `    ${tags}\n    <meta name="twitter:image" content="${escapeAttr(abs(product.image))}" />\n  </head>`);
+    .replace("</head>", `    ${tags}\n    <meta name="twitter:image" content="${escapeAttr(abs(imageUrl))}" />\n  </head>`);
 }
 
 export function createApp({ db, config, mp, log = console }) {
@@ -127,7 +141,7 @@ export function createApp({ db, config, mp, log = console }) {
 
   // ---------- admin (sessão assinada em cookie HttpOnly) ----------
   const admin = express.Router();
-  admin.use(express.json({ limit: "6mb" }));
+  admin.use(express.json({ limit: "25mb" })); // foto principal + fotos das cores
   const isAdmin = (req) => verifySession(config.sessionSecret, parseCookies(req.headers.cookie)[SESSION_COOKIE]);
   const sameOrigin = (req) => {
     const o = req.get("origin");
@@ -168,10 +182,23 @@ export function createApp({ db, config, mp, log = console }) {
   const productValues = (d) => {
     const image = d.imageData ? saveDataUrlImage(d.imageData, config.uploadsDir) : d.image;
     if (!validImageRef(image)) throw new HttpError(422, "invalid_image", "URL de imagem inválida (use https:// ou um arquivo enviado).");
+    // cores que o cliente escolhe; cada uma pode ter foto própria
+    let colors = (d.colors ?? []).map((c) => {
+      const img = c.imageData ? saveDataUrlImage(c.imageData, config.uploadsDir) : c.image && c.image !== image ? c.image : null;
+      if (img && !validImageRef(img)) throw new HttpError(422, "invalid_image", `Foto inválida na cor ${c.name}.`);
+      return { name: clean(c.name), image: img };
+    });
+    if (colors.length === 0 && clean(d.colorway)) colors = [{ name: clean(d.colorway), image: null }];
+    const seen = new Set();
+    for (const c of colors) {
+      const k = c.name.toLocaleLowerCase("pt-BR");
+      if (seen.has(k)) throw new HttpError(422, "duplicate_color", `A cor "${c.name}" está repetida.`);
+      seen.add(k);
+    }
     return {
       name: clean(d.name), line: clean(d.line), category: d.category,
       price_cents: Math.round(d.price * 100), old_price_cents: d.oldPrice ? Math.round(d.oldPrice * 100) : null,
-      image, colorway: clean(d.colorway), tag: clean(d.tag) || null, description: clean(d.description),
+      image, colorway: colors[0]?.name ?? "", colors: JSON.stringify(colors), tag: clean(d.tag) || null, description: clean(d.description),
       sizes: JSON.stringify([...new Set(d.sizes)].sort((a, b) => a - b)),
     };
   };
@@ -182,8 +209,8 @@ export function createApp({ db, config, mp, log = console }) {
     const now = new Date().toISOString();
     const pos = db.prepare("SELECT COALESCE(MAX(position),-1)+1 AS p FROM products").get().p;
     db.prepare(
-      `INSERT INTO products (id,name,line,category,price_cents,old_price_cents,image,colorway,tag,description,sizes,position,created_at,updated_at)
-       VALUES (@id,@name,@line,@category,@price_cents,@old_price_cents,@image,@colorway,@tag,@description,@sizes,@pos,@now,@now)`,
+      `INSERT INTO products (id,name,line,category,price_cents,old_price_cents,image,colorway,colors,tag,description,sizes,position,created_at,updated_at)
+       VALUES (@id,@name,@line,@category,@price_cents,@old_price_cents,@image,@colorway,@colors,@tag,@description,@sizes,@pos,@now,@now)`,
     ).run({ ...v, id, pos, now });
     res.status(201).json(productToApi(db.prepare("SELECT * FROM products WHERE id=?").get(id)));
   });
@@ -192,7 +219,7 @@ export function createApp({ db, config, mp, log = console }) {
     const v = productValues(productSchema.parse(req.body));
     db.prepare(
       `UPDATE products SET name=@name,line=@line,category=@category,price_cents=@price_cents,old_price_cents=@old_price_cents,
-       image=@image,colorway=@colorway,tag=@tag,description=@description,sizes=@sizes,updated_at=@now WHERE id=@id`,
+       image=@image,colorway=@colorway,colors=@colors,tag=@tag,description=@description,sizes=@sizes,updated_at=@now WHERE id=@id`,
     ).run({ ...v, id: req.params.id, now: new Date().toISOString() });
     res.json(productToApi(db.prepare("SELECT * FROM products WHERE id=?").get(req.params.id)));
   });
@@ -275,7 +302,8 @@ export function createApp({ db, config, mp, log = console }) {
       const m = /^\/produtos\/([^/]+)\/?$/.exec(req.path);
       const p = m ? db.prepare("SELECT * FROM products WHERE id=?").get(decodeURIComponent(m[1])) : null;
       res.type("html").setHeader("Cache-Control", "no-cache");
-      res.send(p ? withProductPreview(indexHtml, productToApi(p), config.publicUrl) : indexHtml);
+      const cor = typeof req.query.cor === "string" ? req.query.cor : undefined;
+      res.send(p ? withProductPreview(indexHtml, productToApi(p), config.publicUrl, cor) : indexHtml);
     });
   }
 

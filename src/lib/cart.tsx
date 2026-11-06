@@ -2,17 +2,22 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { type Product } from "@/lib/products";
 import { useProducts } from "@/lib/products-store";
 
-export type CartLine = { id: string; size: number; qty: number };
+export type CartLine = { id: string; size: number; qty: number; color?: string };
 
 type CartContextValue = {
   lines: CartLine[];
-  add: (productId: string, size: number) => void;
-  remove: (productId: string, size: number) => void;
+  add: (productId: string, size: number, color?: string) => void;
+  remove: (productId: string, size: number, color?: string) => void;
   clear: () => void;
   count: number;
   total: number;
-  detailed: { product: Product; size: number; qty: number }[];
+  detailed: DetailedLine[];
 };
+
+export type DetailedLine = { product: Product; size: number; qty: number; color?: string; image: string };
+
+const sameLine = (l: CartLine, id: string, size: number, color?: string) =>
+  l.id === id && l.size === size && (l.color ?? "") === (color ?? "");
 
 const CartContext = createContext<CartContextValue | null>(null);
 const STORAGE_KEY = "tn-sports-cart";
@@ -23,7 +28,8 @@ const isLine = (v: unknown): v is CartLine =>
   typeof (v as CartLine).id === "string" &&
   Number.isInteger((v as CartLine).size) &&
   Number.isInteger((v as CartLine).qty) &&
-  (v as CartLine).qty > 0;
+  (v as CartLine).qty > 0 &&
+  ((v as CartLine).color === undefined || typeof (v as CartLine).color === "string");
 
 function readSaved(): CartLine[] {
   try {
@@ -59,34 +65,34 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<CartContextValue>(() => {
     const detailed = lines
-      .map((line) => {
+      .map((line): DetailedLine | null => {
         const product = products.find((p) => p.id === line.id);
-        return product ? { product, size: line.size, qty: line.qty } : null;
+        if (!product) return null;
+        const image = product.colors?.find((c) => c.name === line.color)?.image ?? product.image;
+        return { product, size: line.size, qty: line.qty, color: line.color, image };
       })
-      .filter((v): v is { product: Product; size: number; qty: number } => v !== null);
+      .filter((v): v is DetailedLine => v !== null);
 
     return {
       lines,
       detailed,
       count: lines.reduce((sum, l) => sum + l.qty, 0),
       total: detailed.reduce((sum, l) => sum + l.product.price * l.qty, 0),
-      add: (productId, size) =>
+      add: (productId, size, color) =>
         setLines((prev) => {
-          const existing = prev.find((l) => l.id === productId && l.size === size);
+          const existing = prev.find((l) => sameLine(l, productId, size, color));
           if (existing) {
             return prev.map((l) =>
               l === existing ? { ...l, qty: l.qty + 1 } : l,
             );
           }
-          return [...prev, { id: productId, size, qty: 1 }];
+          return [...prev, { id: productId, size, qty: 1, ...(color ? { color } : {}) }];
         }),
       clear: () => setLines((prev) => (prev.length ? [] : prev)),
-      remove: (productId, size) =>
+      remove: (productId, size, color) =>
         setLines((prev) =>
           prev
-            .map((l) =>
-              l.id === productId && l.size === size ? { ...l, qty: l.qty - 1 } : l,
-            )
+            .map((l) => (sameLine(l, productId, size, color) ? { ...l, qty: l.qty - 1 } : l))
             .filter((l) => l.qty > 0),
         ),
     };

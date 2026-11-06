@@ -1,6 +1,8 @@
 
 export type Category = "Campo" | "Society";
 
+export type ProductColor = { name: string; image: string };
+
 export type Product = {
   id: string;
   name: string;
@@ -10,6 +12,8 @@ export type Product = {
   oldPrice?: number;
   image: string;
   colorway: string;
+  /** Cores que o cliente pode escolher; cada uma com a sua foto (ou a foto principal). */
+  colors: ProductColor[];
   tag?: string;
   description: string;
   sizes: number[];

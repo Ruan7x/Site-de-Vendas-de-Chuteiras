@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { newPublicId, sha256Hex } from "./security.js";
+import { productColors } from "./db.js";
 import { MercadoPagoError, PAYMENT_ID_RE, verifySignature } from "./mercadopago.js";
 
 export class HttpError extends Error {
@@ -17,6 +18,7 @@ export const createOrderSchema = z.object({
         productId: z.string().min(1).max(80),
         size: z.number().int().min(20).max(60),
         quantity: z.number().int().min(1).max(10),
+        color: z.string().trim().max(40).optional(),
       }),
     )
     .min(1)
@@ -87,7 +89,7 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
   function priceCart(items) {
     const merged = new Map();
     for (const it of items) {
-      const k = `${it.productId}|${it.size}`;
+      const k = `${it.productId}|${it.size}|${it.color ?? ""}`;
       merged.set(k, { ...it, quantity: (merged.get(k)?.quantity ?? 0) + it.quantity });
     }
     const lines = [];
@@ -98,7 +100,18 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
       if (!JSON.parse(p.sizes).includes(it.size))
         throw new HttpError(422, "size_unavailable", `O tamanho ${it.size} de ${p.name} não está disponível.`);
       if (it.quantity > 10) throw new HttpError(422, "quantity_limit", "Limite de 10 unidades por item.");
-      lines.push({ productId: p.id, name: p.name, size: it.size, quantity: it.quantity, unitCents: p.price_cents });
+      const colors = productColors(p);
+      let color = null;
+      if (colors.length) {
+        color = it.color ? colors.find((c) => c.name === it.color)?.name : colors.length === 1 ? colors[0].name : undefined;
+        if (!color)
+          throw new HttpError(
+            422,
+            it.color ? "color_unavailable" : "color_required",
+            it.color ? `A cor ${it.color} de ${p.name} não está mais disponível.` : `Escolha a cor de ${p.name}.`,
+          );
+      }
+      lines.push({ productId: p.id, name: p.name, color, size: it.size, quantity: it.quantity, unitCents: p.price_cents });
       total += p.price_cents * it.quantity;
     }
     if (total <= 0 || total > 999_999_900) throw new HttpError(422, "invalid_total", "Valor total inválido.");
@@ -125,7 +138,7 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     const payload = {
       items: items.map((i) => ({
         id: i.productId,
-        title: `${i.name} (Tam. ${i.size})`.slice(0, 120),
+        title: `${i.name}${i.color ? ` – ${i.color}` : ""} (Tam. ${i.size})`.slice(0, 120),
         quantity: i.quantity,
         unit_price: i.unitCents / 100,
         currency_id: "BRL",
@@ -199,7 +212,9 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     if (o.status === "PAID") throw new HttpError(409, "already_paid", "Este pedido já foi pago.");
     if (!RETRYABLE.has(o.status))
       throw new HttpError(409, "not_retryable", "Este pedido não pode ser reiniciado agora. Consulte o status novamente.");
-    const { lines, total } = priceCart(JSON.parse(o.items_json).map((i) => ({ productId: i.productId, size: i.size, quantity: i.quantity })));
+    const { lines, total } = priceCart(
+      JSON.parse(o.items_json).map((i) => ({ productId: i.productId, size: i.size, quantity: i.quantity, color: i.color ?? undefined })),
+    );
     db.prepare("UPDATE orders SET items_json=?, total_cents=?, updated_at=? WHERE id=?").run(JSON.stringify(lines), total, iso(), o.id);
     return summary(await openCheckout(q.byId.get(o.id)));
   }
@@ -302,8 +317,10 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     const items = JSON.parse(o.items_json)
       .map((i) => {
         const p = q.product.get(i.productId);
-        const color = p?.colorway ? ` – ${p.colorway}` : "";
-        const link = p ? `\n   Foto do modelo: ${config.publicUrl}/produtos/${encodeURIComponent(p.id)}` : "";
+        const colorName = i.color || p?.colorway || "";
+        const color = colorName ? ` – ${colorName}` : "";
+        const query = i.color ? `?cor=${encodeURIComponent(i.color)}` : "";
+        const link = p ? `\n   Foto do modelo: ${config.publicUrl}/produtos/${encodeURIComponent(p.id)}${query}` : "";
         return `• ${i.quantity}x ${i.name}${color} (Tam. ${i.size})${link}`;
       })
       .join("\n");
@@ -318,7 +335,9 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
       publicId: o.public_id,
       number: orderNumber(o.id),
       status: o.status,
-      items: JSON.parse(o.items_json).map((i) => ({ name: i.name, size: i.size, quantity: i.quantity, unitPrice: i.unitCents / 100 })),
+      items: JSON.parse(o.items_json).map((i) => ({
+        name: i.name, color: i.color ?? null, size: i.size, quantity: i.quantity, unitPrice: i.unitCents / 100,
+      })),
       total: o.total_cents / 100,
       createdAt: o.created_at,
       paidAt: o.paid_at,

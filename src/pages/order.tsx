@@ -13,7 +13,7 @@ type OrderView = {
   publicId: string;
   number: string;
   status: string;
-  items: { name: string; size: number; quantity: number; unitPrice: number }[];
+  items: { name: string; color?: string | null; size: number; quantity: number; unitPrice: number }[];
   total: number;
   createdAt: string;
   payUrl: string | null;
@@ -260,7 +260,7 @@ export default function OrderPage() {
             <div>
               <p className="font-display text-base">{it.name}</p>
               <p className="text-xs text-muted-foreground">
-                Tam. {it.size} · {it.quantity}x {formatPrice(it.unitPrice)}
+                {it.color && <>{it.color} · </>}Tam. {it.size} · {it.quantity}x {formatPrice(it.unitPrice)}
               </p>
             </div>
             <p className="font-semibold">{formatPrice(it.unitPrice * it.quantity)}</p>

@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS products (
   price_cents     INTEGER NOT NULL CHECK (price_cents > 0),
   old_price_cents INTEGER,
   image           TEXT NOT NULL,
-  colorway        TEXT NOT NULL DEFAULT '',
+  colorway        TEXT NOT NULL DEFAULT '',  -- nome da 1ª cor (compatibilidade)
+  colors          TEXT NOT NULL DEFAULT '[]', -- JSON: [{ name, image|null }] cores que o cliente escolhe
   tag             TEXT,
   description     TEXT NOT NULL DEFAULT '',
   sizes           TEXT NOT NULL,
@@ -97,6 +98,8 @@ function migrate(db) {
   const fbCols = columns(db, "feedback");
   if (!fbCols.includes("model")) db.exec("ALTER TABLE feedback ADD COLUMN model TEXT");
   if (!fbCols.includes("images")) db.exec("ALTER TABLE feedback ADD COLUMN images TEXT NOT NULL DEFAULT '[]'");
+  if (!columns(db, "products").includes("colors"))
+    db.exec("ALTER TABLE products ADD COLUMN colors TEXT NOT NULL DEFAULT '[]'");
   if (!columns(db, "orders").includes("manual_status"))
     db.exec("ALTER TABLE orders ADD COLUMN manual_status INTEGER NOT NULL DEFAULT 0");
 }
@@ -122,10 +125,27 @@ function seedProductsOnce(db) {
   })();
 }
 
-export const productToApi = (r) => ({
-  id: r.id, name: r.name, line: r.line, category: r.category,
-  price: r.price_cents / 100,
-  oldPrice: r.old_price_cents ? r.old_price_cents / 100 : undefined,
-  image: r.image, colorway: r.colorway, tag: r.tag ?? undefined,
-  description: r.description, sizes: JSON.parse(r.sizes),
-});
+/** Cores do produto. Produtos antigos (sem lista) viram uma cor só, a do campo colorway. */
+export function productColors(r) {
+  let list = [];
+  try {
+    list = JSON.parse(r.colors || "[]");
+  } catch {
+    list = [];
+  }
+  if (!Array.isArray(list) || list.length === 0) return r.colorway ? [{ name: r.colorway, image: null }] : [];
+  return list.filter((c) => c && typeof c.name === "string" && c.name).map((c) => ({ name: c.name, image: c.image || null }));
+}
+
+export const productToApi = (r) => {
+  const colors = productColors(r);
+  return {
+    id: r.id, name: r.name, line: r.line, category: r.category,
+    price: r.price_cents / 100,
+    oldPrice: r.old_price_cents ? r.old_price_cents / 100 : undefined,
+    image: r.image, colorway: colors[0]?.name ?? r.colorway, tag: r.tag ?? undefined,
+    // cor sem foto própria usa a foto principal do produto
+    colors: colors.map((c) => ({ name: c.name, image: c.image || r.image })),
+    description: r.description, sizes: JSON.parse(r.sizes),
+  };
+};

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { Check, Truck, RefreshCcw } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Check, RefreshCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ProductCard } from "@/components/product-card";
@@ -14,6 +14,8 @@ export default function ProductDetail() {
   const product = products.find((p) => p.id === id);
   const { add } = useCart();
   const [size, setSize] = useState<number | null>(null);
+  // A cor escolhida fica na URL (?cor=), então o link compartilhado abre na mesma cor.
+  const [params, setParams] = useSearchParams();
 
   if (!product && loading) {
     return <div className="mx-auto max-w-7xl px-4 py-20 text-center text-muted-foreground">Carregando…</div>;
@@ -31,6 +33,18 @@ export default function ProductDetail() {
   }
 
   const related = products.filter((p) => p.id !== product.id).slice(0, 3);
+  const colors = product.colors ?? [];
+  const color = colors.find((c) => c.name === params.get("cor")) ?? colors[0];
+  const image = color?.image ?? product.image;
+  const chooseColor = (name: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("cor", name);
+        return next;
+      },
+      { replace: true, preventScrollReset: true },
+    );
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
@@ -46,10 +60,11 @@ export default function ProductDetail() {
       </nav>
 
       <div className="mt-8 grid gap-10 lg:grid-cols-2">
-        <div className="border border-border bg-secondary">
+        <div className="self-start overflow-hidden border border-border bg-secondary lg:sticky lg:top-24">
           <img
-            src={product.image}
-            alt={`Chuteira ${product.name} ${product.colorway}`}
+            key={image}
+            src={image}
+            alt={`Chuteira ${product.name} ${color?.name ?? product.colorway}`}
             width={900}
             height={900}
             className="aspect-square w-full object-cover"
@@ -61,7 +76,7 @@ export default function ProductDetail() {
             {product.category} · Linha {product.line}
           </p>
           <h1 className="mt-3 text-4xl sm:text-5xl">{product.name}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">{product.colorway}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{color?.name ?? product.colorway}</p>
 
           <div className="mt-6 flex items-baseline gap-3">
             <span className="font-display text-3xl text-primary">
@@ -80,6 +95,34 @@ export default function ProductDetail() {
           <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
             {product.description}
           </p>
+
+          {colors.length > 1 && (
+            <div className="mt-8">
+              <p className="eyebrow text-muted-foreground">
+                Cor: <span className="text-foreground">{color?.name}</span>
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2" role="radiogroup" aria-label="Cor">
+                {colors.map((c) => {
+                  const active = c.name === color?.name;
+                  return (
+                    <button
+                      key={c.name}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => chooseColor(c.name)}
+                      className={`flex items-center gap-2 border p-1 pr-3 text-sm transition-colors ${
+                        active ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:border-primary"
+                      }`}
+                    >
+                      <img src={c.image} alt="" className="size-10 object-cover" loading="lazy" />
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="mt-8">
             <p className="eyebrow text-muted-foreground">Tamanho (BR)</p>
@@ -110,8 +153,10 @@ export default function ProductDetail() {
                   toast.error("Escolha o tamanho", { description: "Selecione um tamanho antes de adicionar à sacola." });
                   return;
                 }
-                add(product.id, size);
-                toast.success("Adicionado à sacola", { description: `${product.name} · Tam. ${size}` });
+                add(product.id, size, color?.name);
+                toast.success("Adicionado à sacola", {
+                  description: `${product.name}${color ? ` · ${color.name}` : ""} · Tam. ${size}`,
+                });
               }}
             >
               Adicionar à sacola
@@ -123,13 +168,10 @@ export default function ProductDetail() {
 
           <ul className="mt-8 space-y-3 border-t border-border pt-6 text-sm text-muted-foreground">
             <li className="flex items-center gap-2">
-              <Truck className="size-4 text-primary" /> Frete grátis acima de R$ 499
-            </li>
-            <li className="flex items-center gap-2">
               <RefreshCcw className="size-4 text-primary" /> 30 dias para troca de tamanho
             </li>
             <li className="flex items-center gap-2">
-              <Check className="size-4 text-primary" /> Produto original com garantia
+              <Check className="size-4 text-primary" /> Produto com garantia
             </li>
           </ul>
         </div>

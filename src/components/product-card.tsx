@@ -37,7 +37,7 @@ export function ProductCard({ product }: { product: Product }) {
         </p>
         <h3 className="mt-2 font-display text-2xl">{product.name}</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          {product.colorway}
+          {(product.colors?.length ?? 0) > 1 ? `${product.colors.length} cores` : product.colorway}
           {sizes && ` · Tam. ${sizes}`}
         </p>
         <div className="mt-auto flex items-end justify-between gap-3 pt-5">

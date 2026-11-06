@@ -3,11 +3,13 @@ import { api } from "@/lib/api";
 import type { Product } from "@/lib/products";
 
 /** Dados enviados ao painel admin. `imageData` = upload (data URL); `image` = URL/caminho existente. */
-export type ProductInput = Omit<Product, "id" | "image" | "oldPrice" | "tag"> & {
+export type ProductInput = Omit<Product, "id" | "image" | "oldPrice" | "tag" | "colors"> & {
   oldPrice?: number | null;
   tag?: string | null;
   image?: string;
   imageData?: string;
+  /** `imageData` = foto nova da cor (data URL); `image` = foto existente; nenhum = usa a principal. */
+  colors: { name: string; image?: string | null; imageData?: string }[];
 };
 
 type ProductsContextValue = {

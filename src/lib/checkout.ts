@@ -1,7 +1,7 @@
 import { api } from "@/lib/api";
 
 export type CheckoutResult = { publicId: string; status: string; payUrl: string | null };
-type Line = { id: string; size: number; qty: number };
+type Line = { id: string; size: number; qty: number; color?: string };
 
 const KEY = "tn-sports-checkout";
 
@@ -12,13 +12,15 @@ function randomKey() {
 }
 
 /**
- * Cria o pedido no servidor a partir do carrinho existente. Enviamos apenas produto/tamanho/quantidade:
+ * Cria o pedido no servidor a partir do carrinho existente. Enviamos apenas produto/cor/tamanho/quantidade:
  * preços e total são SEMPRE recalculados no servidor. A chave de idempotência evita pedidos duplicados
  * (duplo clique, recarregar a página, voltar do Mercado Pago e clicar de novo com o mesmo carrinho).
  */
 export async function startCheckout(lines: Line[]): Promise<CheckoutResult> {
-  const items = lines.map((l) => ({ productId: l.id, size: l.size, quantity: l.qty }));
-  const sig = JSON.stringify([...items].sort((a, b) => `${a.productId}${a.size}`.localeCompare(`${b.productId}${b.size}`)));
+  const items = lines.map((l) => ({ productId: l.id, size: l.size, quantity: l.qty, ...(l.color ? { color: l.color } : {}) }));
+  const sig = JSON.stringify(
+    [...items].sort((a, b) => `${a.productId}${a.size}${a.color ?? ""}`.localeCompare(`${b.productId}${b.size}${b.color ?? ""}`)),
+  );
   let key = "";
   try {
     const saved = JSON.parse(sessionStorage.getItem(KEY) || "null") as { sig: string; key: string } | null;

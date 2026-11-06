@@ -27,7 +27,7 @@ function CartSheet() {
     setPaying(true);
     const tab = openPayTab();
     try {
-      const res = await startCheckout(detailed.map((l) => ({ id: l.product.id, size: l.size, qty: l.qty })));
+      const res = await startCheckout(detailed.map((l) => ({ id: l.product.id, size: l.size, qty: l.qty, color: l.color })));
       if (res.payUrl && tab.go(res.payUrl)) {
         // pagamento numa aba nova; esta aba acompanha o pedido e abre o WhatsApp quando for pago
         setOpen(false);
@@ -74,11 +74,11 @@ function CartSheet() {
           <div className="mt-6 flex-1 space-y-4 overflow-y-auto">
             {detailed.map((line) => (
               <div
-                key={`${line.product.id}-${line.size}`}
+                key={`${line.product.id}-${line.size}-${line.color ?? ""}`}
                 className="flex gap-3 border border-border p-3"
               >
                 <img
-                  src={line.product.image}
+                  src={line.image}
                   alt={line.product.name}
                   loading="lazy"
                   width={900}
@@ -88,7 +88,7 @@ function CartSheet() {
                 <div className="flex-1">
                   <p className="font-display text-sm">{line.product.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    Tam. {line.size} · {line.qty}x
+                    {line.color && <>{line.color} · </>}Tam. {line.size} · {line.qty}x
                   </p>
                   <p className="mt-1 text-sm font-semibold text-primary">
                     {formatPrice(line.product.price * line.qty)}
@@ -98,7 +98,7 @@ function CartSheet() {
                   variant="ghost"
                   size="icon"
                   aria-label="Remover item"
-                  onClick={() => remove(line.product.id, line.size)}
+                  onClick={() => remove(line.product.id, line.size, line.color)}
                 >
                   <Trash2 />
                 </Button>

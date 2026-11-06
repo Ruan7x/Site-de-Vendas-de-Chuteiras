@@ -7,34 +7,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { useProducts } from "@/lib/products-store";
+import { compressImage } from "@/lib/image";
 
 const MAX_IMAGES = 3;
 const OTHER = "__outro__";
 
-/** Reduz a foto no navegador (até 1280 px, JPEG) para o envio ser leve. */
-async function compressImage(file: File): Promise<string> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error("Não foi possível ler essa imagem."));
-      el.src = url;
-    });
-    const scale = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Seu navegador não conseguiu processar a imagem.");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.82);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
 
 const schema = z.object({
   rating: z.number({ message: "Escolha uma nota de 1 a 5 estrelas." }).int().min(1, "Escolha uma nota de 1 a 5 estrelas.").max(5),
@@ -84,7 +61,7 @@ export function FeedbackSection() {
         continue;
       }
       try {
-        const data = await compressImage(f);
+        const data = await compressImage(f, 1280, 0.82);
         setImages((prev) => (prev.length < MAX_IMAGES ? [...prev, data] : prev));
       } catch (err) {
         setErrors((p) => ({ ...p, images: err instanceof Error ? err.message : "Imagem inválida." }));
