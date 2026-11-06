@@ -82,6 +82,33 @@ Nenhum arquivo `.env` vai para o GitHub, nem de exemplo: o `.gitignore` ignora t
 4. A página `/pedido/:id` mostra o estado do pagamento e só libera o WhatsApp da loja depois da
    confirmação feita pelo servidor.
 
+## Publicar no Render
+
+O arquivo `render.yaml` já descreve o serviço: plano **Starter** (sempre ligado), disco permanente de
+1 GB em `/var/data` para o banco e as fotos, build, start, verificação de saúde e as variáveis.
+O plano gratuito não serve: ele apaga o banco e as fotos e desliga o site sem visitas.
+
+1. Crie a conta em render.com entrando com o GitHub e cadastre um cartão.
+2. **New > Blueprint**, escolha o repositório `Site-de-Vendas-de-Chuteiras` e clique em **Apply**.
+3. O Render pede os valores secretos (eles ficam só no Render, nunca no GitHub):
+   - `MP_ACCESS_TOKEN`: Access Token de **produção** do Mercado Pago;
+   - `MP_WEBHOOK_SECRET`: deixe vazio por enquanto (passo 6);
+   - `WHATSAPP_NUMBER`: `55` + DDD + número, só dígitos;
+   - `ADMIN_PASSWORD`: senha forte do `/admin`;
+   - `PUBLIC_URL`: deixe vazio até ter domínio próprio (o site usa o endereço `.onrender.com`).
+4. Espere o build terminar (alguns minutos) e abra o endereço `https://….onrender.com`.
+5. O banco no Render começa novo, com os produtos padrão: cadastre ou ajuste os produtos no `/admin`.
+6. No painel do Mercado Pago (modo produção) > Webhooks, cadastre
+   `https://SEU-ENDEREÇO/api/webhooks/mercadopago` com o evento **Pagamentos**, copie a assinatura
+   secreta e cole em `MP_WEBHOOK_SECRET` no Render (**Environment > Save**).
+7. Domínio próprio: registre o `.com.br` no Registro.br; no Render, **Settings > Custom Domains**,
+   adicione `seudominio.com.br` e `www.seudominio.com.br` e crie no Registro.br os registros DNS que o
+   Render mostrar. Quando o https ficar ativo, preencha `PUBLIC_URL=https://seudominio.com.br` e
+   atualize a URL do webhook no Mercado Pago.
+
+Depois disso, cada `git push` na branch `main` atualiza o site sozinho (o site fica alguns segundos
+fora do ar durante a troca, por causa do disco).
+
 ## Estrutura
 
 ```

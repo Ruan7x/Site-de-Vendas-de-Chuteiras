@@ -30,3 +30,12 @@ test(".env: ignora comentário no fim da linha e respeita aspas", () => {
     WHATSAPP_NUMBER: "5565999999999",
   });
 });
+
+test("Render: usa RENDER_EXTERNAL_URL quando PUBLIC_URL está vazia", async () => {
+  const { loadConfig } = await import("../config.js");
+  const c = loadConfig({ RENDER_EXTERNAL_URL: "https://tn-sports.onrender.com", PUBLIC_URL: "" });
+  assert.equal(c.publicUrl, "https://tn-sports.onrender.com");
+  assert.equal(c.webhookReachable, true);
+  assert.equal(c.secureCookies, true);
+  assert.equal(loadConfig({ RENDER_EXTERNAL_URL: "https://x.onrender.com", PUBLIC_URL: "https://tnsports.com.br" }).publicUrl, "https://tnsports.com.br");
+});

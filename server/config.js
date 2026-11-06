@@ -21,7 +21,8 @@ const strip = (s) => (s || "").replace(/\/+$/, "");
 const isPublicHttps = (u) => /^https:\/\//.test(u) && !/^https:\/\/(localhost|127\.|\[::1\])/.test(u);
 
 export function loadConfig(env = process.env) {
-  const publicUrl = strip(env.PUBLIC_URL || "http://localhost:5173");
+  // No Render, RENDER_EXTERNAL_URL (ex.: https://tn-sports.onrender.com) é definida automaticamente.
+  const publicUrl = strip(env.PUBLIC_URL || env.RENDER_EXTERNAL_URL || "http://localhost:5173");
 
   return {
     port: Number(env.PORT || 3001),

@@ -1,0 +1,47 @@
+# Configuração do Render (Blueprint). No painel: New > Blueprint > escolha este repositório.
+# O plano gratuito NÃO serve: ele apaga o banco e as fotos e desliga o site sem visitas.
+services:
+  - type: web
+    name: tn-sports
+    runtime: node
+    plan: starter              # plano pago mais barato (sempre ligado)
+    region: virginia           # o Render não tem servidor no Brasil; Virginia (EUA) é o mais próximo
+    branch: main
+    autoDeploy: true           # cada git push na main atualiza o site sozinho
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:                      # disco permanente: banco SQLite, fotos dos produtos e das avaliações
+      name: tn-sports-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATABASE_PATH
+        value: /var/data/tn-sports.db
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: FEEDBACK_UPLOADS_DIR
+        value: /var/data/feedback-uploads
+      - key: MP_ENV
+        value: production
+      - key: MP_REQUIRE_SIGNATURE
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true    # o Render gera um valor aleatório
+      # Valores secretos: o Render pede para você digitar no painel (nunca ficam no GitHub)
+      - key: MP_ACCESS_TOKEN
+        sync: false
+      - key: MP_WEBHOOK_SECRET
+        sync: false
+      - key: WHATSAPP_NUMBER
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # Com domínio próprio, preencha PUBLIC_URL (ex.: https://tnsports.com.br).
+      # Sem ele, o site usa o endereço .onrender.com automaticamente.
+      - key: PUBLIC_URL
+        sync: false
