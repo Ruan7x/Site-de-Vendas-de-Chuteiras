@@ -6,7 +6,15 @@ export function SiteFooter() {
     <footer className="border-t border-border bg-surface">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 md:grid-cols-4">
         <div>
-          <img src="/logo-192.png" alt="TN Sports" width={192} height={192} loading="lazy" className="size-20" />
+          <div className="flex items-center gap-3">
+            <img src="/logo-192.png" alt="" width={192} height={192} loading="lazy" className="size-12" />
+            <span className="flex items-center gap-2">
+              <span className="skew-tag bg-primary px-2 py-0.5 font-display text-xl text-primary-foreground">
+                TN
+              </span>
+              <span className="font-display text-xl tracking-wider">Sports</span>
+            </span>
+          </div>
           <p className="mt-4 max-w-xs text-sm text-muted-foreground">
             Chuteiras de performance para campo e society. Feito para quem joga pra
             valer.

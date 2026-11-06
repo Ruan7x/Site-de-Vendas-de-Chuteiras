@@ -171,14 +171,20 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95">
       <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link to="/" className="flex shrink-0 items-center" aria-label="TN Sports, página inicial">
+        <Link to="/" className="group flex shrink-0 items-center gap-3" aria-label="TN Sports, página inicial">
           <img
             src="/logo-192.png"
-            alt="TN Sports"
+            alt=""
             width={192}
             height={192}
-            className="size-[52px] transition-transform duration-300 hover:scale-105"
+            className="size-10 transition-transform sm:size-11 duration-300 group-hover:scale-105"
           />
+          <span className="flex items-center gap-2">
+            <span className="skew-tag bg-primary px-2.5 py-0.5 font-display text-xl text-primary-foreground sm:text-2xl">
+              TN
+            </span>
+            <span className="font-display text-xl tracking-wider sm:text-2xl">Sports</span>
+          </span>
         </Link>
 
         <nav className="hidden items-center gap-10 md:flex">{nav}</nav>
