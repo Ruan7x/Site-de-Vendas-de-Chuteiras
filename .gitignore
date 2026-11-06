@@ -6,9 +6,10 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 
+# Nunca subir arquivos .env (nem de exemplo)
 .env
 .env.*
-!.env.example
+*.env
 data/
 *.tsbuildinfo
 .mp-integrate-progress.md

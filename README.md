@@ -12,7 +12,7 @@ Precisa de Node 20 ou mais novo.
 
 ```bash
 npm install
-cp .env.example .env     # preencha os valores (tabela abaixo)
+# crie o arquivo .env (modelo abaixo, em "Variáveis de ambiente")
 npm run dev              # API em :3001 e site em :5173
 ```
 
@@ -26,6 +26,31 @@ npm run test:whatsapp    # cria um pedido pago de teste para ver o fluxo do What
 ```
 
 ## Variáveis de ambiente
+
+Crie na raiz do projeto um arquivo chamado `.env` (ele **nunca** vai para o GitHub) com o modelo
+abaixo e preencha os valores conforme a tabela. Não deixe comentário no fim de uma linha com valor;
+coloque o comentário na linha de cima.
+
+```
+PORT=3001
+PUBLIC_URL=http://localhost:5173
+# WEBHOOK_BASE_URL=https://seu-dominio.com.br
+# TRUST_PROXY=1
+
+# sandbox (credenciais de teste) | production (credenciais reais)
+MP_ENV=sandbox
+MP_ACCESS_TOKEN=
+MP_WEBHOOK_SECRET=
+MP_REQUIRE_SIGNATURE=true
+
+WHATSAPP_NUMBER=
+ADMIN_PASSWORD=
+SESSION_SECRET=
+
+# DATABASE_PATH=./data/tn-sports.db
+# UPLOADS_DIR=./data/uploads
+# FEEDBACK_UPLOADS_DIR=./data/feedback-uploads
+```
 
 | Variável | Para quê |
 |---|---|
@@ -44,7 +69,8 @@ No painel do Mercado Pago, cadastre o webhook `https://SEU-DOMINIO/api/webhooks/
 evento **Pagamentos**. Mesmo sem o aviso, a página `/pedido/:id` consulta a API do Mercado Pago e
 confirma o pagamento sozinha.
 
-O arquivo `.env` nunca deve ir para o GitHub. O `.gitignore` já o ignora, assim como a pasta `data/`.
+Nenhum arquivo `.env` vai para o GitHub, nem de exemplo: o `.gitignore` ignora todos (`.env`, `.env.*`,
+`*.env`), assim como a pasta `data/`.
 
 ## Como funciona a compra
 
