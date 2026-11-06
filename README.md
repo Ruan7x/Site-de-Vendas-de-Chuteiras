@@ -74,13 +74,19 @@ Nenhum arquivo `.env` vai para o GitHub, nem de exemplo: o `.gitignore` ignora t
 
 ## Como funciona a compra
 
-1. O botão **Finalizar compra** envia ao servidor só produto, tamanho e quantidade. Preços e total são
-   recalculados a partir do banco.
-2. O cliente paga na página segura do Mercado Pago. Voltar dela não confirma nada.
-3. O servidor recebe o aviso do Mercado Pago, confere a assinatura e consulta o pagamento na API do Mercado Pago
-   antes de marcá-lo como pago.
-4. A página `/pedido/:id` mostra o estado do pagamento e só libera o WhatsApp da loja depois da
-   confirmação feita pelo servidor.
+1. **Finalizar compra** envia ao servidor só produto, cor, tamanho e quantidade. Preços e total são
+   recalculados a partir do banco, e o cliente vai para a página do pedido (`/pedido/:id`).
+2. Na página do pedido, o cliente escolhe:
+   - **Pix** (no próprio site): informa o e-mail, o servidor cria o pagamento Pix pela API do Mercado
+     Pago e a página mostra o QR code e o "copia e cola". O cliente não sai do navegador, nem no celular.
+     O Pix vale 1 hora; recarregar a página mostra o mesmo código.
+   - **Cartão ou boleto**: abre a página segura do Mercado Pago numa aba nova.
+3. O servidor confirma o pagamento consultando a API do Mercado Pago (pelo webhook, pela página do
+   pedido e por uma conferência automática a cada minuto). Voltar de uma página de pagamento não
+   confirma nada sozinho.
+4. Confirmado o pagamento, a página do pedido abre o WhatsApp da loja com a mensagem do pedido.
+
+O Pix só funciona se a conta Mercado Pago da loja tiver uma **chave Pix cadastrada**.
 
 ## Publicar no Render
 

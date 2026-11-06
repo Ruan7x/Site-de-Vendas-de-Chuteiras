@@ -99,7 +99,7 @@ export function createApp({ db, config, mp, log = console }) {
 
   const limit = (windowMs, max, key) => createRateLimiter({ windowMs, max, key });
   const rl = {
-    orderCreate: limit(60_000, 10), orderRead: limit(60_000, 120), orderRetry: limit(60_000, 10),
+    orderCreate: limit(60_000, 10), orderRead: limit(60_000, 120), orderRetry: limit(60_000, 10), pix: limit(60_000, 10),
     webhook: limit(60_000, 600), login: limit(15 * 60_000, 10), admin: limit(60_000, 120),
     feedbackAttempts: limit(3600_000, 60), feedbackStored: limit(3600_000, 5), feedbackGlobal: limit(3600_000, 200, () => "all"),
   };
@@ -286,6 +286,30 @@ export function createApp({ db, config, mp, log = console }) {
       res.set("Cache-Control", "no-store");
       res.json(view);
     } catch (e) { next(e); }
+  });
+  // Pix dentro do site: gera (ou reaproveita) o QR code do pedido
+  app.post("/api/orders/:publicId/pix", rl.pix, async (req, res, next) => {
+    try {
+      if (!PUBLIC_ID_RE.test(req.params.publicId)) throw new HttpError(404, "not_found", "Pedido não encontrado.");
+      const { email } = z.object({ email: z.string().trim().toLowerCase().max(120).email("Informe um e-mail válido.") }).parse(req.body);
+      res.json({ pix: await orders.createPix(req.params.publicId, email) });
+    } catch (e) {
+      next(e);
+    }
+  });
+  app.get("/api/orders/:publicId/pix.png", rl.orderRead, (req, res) => {
+    const img = PUBLIC_ID_RE.test(req.params.publicId) ? orders.pixImage(req.params.publicId) : null;
+    if (!img) return res.status(404).json({ error: "not_found", message: "QR code indisponível." });
+    res.type("png").setHeader("Cache-Control", "private, max-age=300").send(img);
+  });
+  // Cartão ou boleto: link da página do Mercado Pago (reaproveita ou cria um novo)
+  app.post("/api/orders/:publicId/card", rl.orderRetry, async (req, res, next) => {
+    try {
+      if (!PUBLIC_ID_RE.test(req.params.publicId)) throw new HttpError(404, "not_found", "Pedido não encontrado.");
+      res.json(await orders.cardCheckout(req.params.publicId));
+    } catch (e) {
+      next(e);
+    }
   });
   app.post("/api/orders/:publicId/retry", rl.orderRetry, async (req, res, next) => {
     try {

@@ -3,7 +3,8 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Clock, Loader2, MessageCircle, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { closePayTab, openPayTab } from "@/lib/pay-tab";
+import { closePayTab } from "@/lib/pay-tab";
+import { PaymentPanel, type PixInfo } from "@/components/payment-panel";
 import { api, ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart";
 import { forgetCheckoutKey } from "@/lib/checkout";
@@ -20,6 +21,7 @@ type OrderView = {
   canRetry: boolean;
   whatsappUrl: string | null;
   whatsappConfigured: boolean;
+  pix: PixInfo | null;
   verification: "ok" | "error";
 };
 
@@ -27,7 +29,7 @@ type Tone = "success" | "pending" | "danger";
 const UI: Record<string, { title: string; text: string; tone: Tone; icon: typeof Clock }> = {
   AWAITING_PAYMENT: {
     title: "Aguardando pagamento",
-    text: "Ainda não recebemos a confirmação do Mercado Pago. Se você já pagou, aguarde alguns instantes — esta página atualiza sozinha. Pix e boleto podem levar mais tempo.",
+    text: "Escolha abaixo como pagar. Esta página atualiza sozinha e abre o WhatsApp da loja assim que o pagamento for confirmado.",
     tone: "pending",
     icon: Clock,
   },
@@ -45,19 +47,19 @@ const UI: Record<string, { title: string; text: string; tone: Tone; icon: typeof
   },
   DECLINED: {
     title: "Pagamento recusado",
-    text: "O pagamento não foi aprovado. Você pode tentar novamente, inclusive com outra forma de pagamento — sem criar um novo pedido.",
+    text: "O pagamento não foi aprovado. Tente de novo abaixo, inclusive com outra forma de pagamento — sem criar um novo pedido.",
     tone: "danger",
     icon: XCircle,
   },
   CANCELED: {
     title: "Pagamento cancelado",
-    text: "O pagamento foi cancelado. Nenhuma cobrança foi concluída. Você pode tentar novamente.",
+    text: "O pagamento foi cancelado. Nenhuma cobrança foi concluída. Você pode tentar de novo abaixo.",
     tone: "danger",
     icon: XCircle,
   },
   EXPIRED: {
-    title: "Link de pagamento expirado",
-    text: "O tempo para pagar este pedido acabou. Gere um novo link de pagamento e conclua a compra.",
+    title: "Tempo para pagar expirado",
+    text: "O prazo do pagamento acabou sem confirmação. Gere um novo Pix ou pague com cartão ou boleto abaixo.",
     tone: "danger",
     icon: XCircle,
   },
@@ -69,7 +71,7 @@ const UI: Record<string, { title: string; text: string; tone: Tone; icon: typeof
   },
   ERROR: {
     title: "Erro ao iniciar o pagamento",
-    text: "Não conseguimos abrir o ambiente de pagamento. Tente novamente.",
+    text: "Não conseguimos preparar o pagamento. Tente de novo abaixo.",
     tone: "danger",
     icon: AlertTriangle,
   },
@@ -114,7 +116,6 @@ export default function OrderPage() {
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
-  const [retrying, setRetrying] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const redirected = useRef(false);
   const paidHandled = useRef(false);
@@ -142,10 +143,18 @@ export default function OrderPage() {
     if (!pending) return;
     const started = Date.now();
     const t = setInterval(() => {
-      if (Date.now() - started > 20 * 60_000) clearInterval(t);
+      if (Date.now() - started > 70 * 60_000) clearInterval(t);
       else void load();
     }, 4000);
-    return () => clearInterval(t);
+    // no celular o navegador pausa a página enquanto o cliente paga no app do banco: confere ao voltar
+    const onVisible = () => document.visibilityState === "visible" && void load();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
   }, [pending, load]);
 
   // Pagamento confirmado pelo servidor: limpa a sacola e agenda o WhatsApp (uma única vez por pedido).
@@ -180,27 +189,6 @@ export default function OrderPage() {
     setChecking(true);
     await load();
     setChecking(false);
-  };
-
-  const retry = async () => {
-    setRetrying(true);
-    try {
-      const tab = openPayTab();
-      const res = await api<{ payUrl: string | null }>(`/api/orders/${encodeURIComponent(publicId)}/retry`, { method: "POST" }).catch(
-        (e) => {
-          tab.close();
-          throw e;
-        },
-      );
-      if (res.payUrl && !tab.go(res.payUrl)) window.location.assign(res.payUrl);
-      else {
-        if (!res.payUrl) tab.close();
-        await load();
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Não foi possível tentar novamente.");
-    }
-    setRetrying(false);
   };
 
   if (notFound) {
@@ -272,11 +260,8 @@ export default function OrderPage() {
         </div>
       </div>
 
-      {pending && (
-        <p className="mt-6 border-l-2 border-primary pl-4 text-sm text-muted-foreground">
-          Conclua o pagamento na aba do Mercado Pago. <strong className="text-foreground">Deixe esta página aberta</strong>: ela
-          abre o WhatsApp da loja sozinha assim que o pagamento for confirmado.
-        </p>
+      {(order.status === "AWAITING_PAYMENT" || order.canRetry) && (
+        <PaymentPanel publicId={order.publicId} pix={order.pix} onChanged={load} />
       )}
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -293,20 +278,6 @@ export default function OrderPage() {
               {order.number}.
             </p>
           ))}
-
-        {order.status === "AWAITING_PAYMENT" && order.payUrl && (
-          <Button asChild variant="volt" size="xl" className="flex-1">
-            <a href={order.payUrl} target="_blank" rel="noopener noreferrer">
-              Ir para o pagamento
-            </a>
-          </Button>
-        )}
-
-        {order.canRetry && (
-          <Button variant="volt" size="xl" className="flex-1" onClick={retry} disabled={retrying}>
-            {retrying ? <Loader2 className="animate-spin" /> : <RefreshCw />} Tentar novamente
-          </Button>
-        )}
 
         {(pending || order.status === "VERIFICATION_ERROR" || order.verification === "error") && (
           <Button variant="onDark" size="xl" onClick={checkAgain} disabled={checking}>

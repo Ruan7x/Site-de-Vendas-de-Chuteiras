@@ -55,7 +55,12 @@ export function derivePaymentState(payments, totalCents) {
   const refunded = list.find((p) => p.status === "refunded" || p.status === "charged_back");
   if (refunded) return { status: "REFUNDED", payment: refunded };
 
-  const latest = [...list].sort((x, y) => String(y.date_created ?? "").localeCompare(String(x.date_created ?? "")))[0];
+  // Um pagamento ainda em andamento (ex.: Pix válido esperando a transferência) vale mais que tentativas
+  // já encerradas (cartão recusado, Pix anterior vencido). Entre os encerrados, vale o mais recente.
+  const byDate = [...list].sort((x, y) => String(y.date_created ?? "").localeCompare(String(x.date_created ?? "")));
+  const inAnalysis = byDate.find((p) => ["in_process", "authorized", "in_mediation"].includes(p.status));
+  const pending = byDate.find((p) => p.status === "pending");
+  const latest = inAnalysis ?? pending ?? byDate[0];
   switch (latest.status) {
     case "pending":
       return { status: "AWAITING_PAYMENT", payment: latest };
@@ -174,6 +179,91 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     return q.byId.get(order.id);
   }
 
+  // ---------- Pix dentro do site (API de Payments) ----------
+  // O cliente paga pelo QR code / copia e cola na própria página do pedido, sem ir ao site ou app do
+  // Mercado Pago. A confirmação é a mesma de sempre: busca por external_reference + webhook.
+  const PIX_TTL_MS = 60 * 60_000; // 1 hora para pagar
+  const PIX_STATUSES = new Set(["AWAITING_PAYMENT", ...RETRYABLE]);
+  const activePix = (o) =>
+    o.pix_qr_code && o.pix_expires_at && Date.parse(o.pix_expires_at) > now() + 30_000 && o.status === "AWAITING_PAYMENT";
+
+  async function createPix(publicId, email) {
+    let o = q.byPublic.get(publicId);
+    if (!o) throw new HttpError(404, "order_not_found", "Pedido não encontrado.");
+    if (activePix(o)) return pixView(o); // já existe um Pix válido: reaproveita (recarregar não gera outro)
+    if (!PIX_STATUSES.has(o.status))
+      throw new HttpError(409, "pix_not_allowed", o.status === "PAID" ? "Este pedido já está pago." : "Este pedido não aceita um novo Pix agora.");
+    if (!mp.configured)
+      throw new HttpError(503, "payments_not_configured", "Pagamentos ainda não estão configurados nesta loja.");
+
+    if (RETRYABLE.has(o.status)) {
+      // pedido retomado (expirado/recusado): recalcula com os preços atuais, como no retryOrder
+      const { lines, total } = priceCart(
+        JSON.parse(o.items_json).map((i) => ({ productId: i.productId, size: i.size, quantity: i.quantity, color: i.color ?? undefined })),
+      );
+      db.prepare("UPDATE orders SET items_json=?, total_cents=?, updated_at=? WHERE id=?").run(JSON.stringify(lines), total, iso(), o.id);
+      o = q.byId.get(o.id);
+    }
+    const attempt = (o.pix_attempt ?? 0) + 1;
+    const expiresAt = now() + PIX_TTL_MS;
+    const items = JSON.parse(o.items_json);
+    const payload = {
+      transaction_amount: o.total_cents / 100,
+      description: `TN Sports – Pedido #${orderNumber(o.id)}`.slice(0, 120),
+      payment_method_id: "pix",
+      payer: { email },
+      external_reference: o.reference_id,
+      date_of_expiration: mpDate(expiresAt),
+      statement_descriptor: "TN SPORTS",
+      additional_info: {
+        items: items.map((i) => ({
+          id: i.productId,
+          title: `${i.name}${i.color ? ` – ${i.color}` : ""} (Tam. ${i.size})`.slice(0, 120),
+          quantity: i.quantity,
+          unit_price: i.unitCents / 100,
+        })),
+      },
+    };
+    if (config.webhookReachable) payload.notification_url = `${config.webhookBaseUrl}/api/webhooks/mercadopago`;
+
+    let res;
+    try {
+      // mesma chave na mesma tentativa: se a resposta se perder e o cliente clicar de novo, não cria 2 Pix
+      res = await mp.createPayment(payload, `pix-${o.public_id}-${attempt}`);
+    } catch (err) {
+      log.error(`[pedido ${orderNumber(o.id)}] falha ao gerar Pix: ${err.message}`);
+      if (err instanceof MercadoPagoError && err.status >= 400 && err.status < 500)
+        throw new HttpError(422, "pix_rejected", "O Mercado Pago não aceitou gerar o Pix. Confira o e-mail e tente de novo.");
+      throw new HttpError(502, "pix_failed", "Não foi possível gerar o Pix agora. Tente novamente em instantes.");
+    }
+    const tx = res?.point_of_interaction?.transaction_data;
+    if (!res?.id || !PAYMENT_ID_RE.test(String(res.id)) || typeof tx?.qr_code !== "string" || !tx.qr_code) {
+      log.error(`[pedido ${orderNumber(o.id)}] resposta de Pix inesperada (status ${res?.status})`);
+      throw new HttpError(502, "pix_failed", "Não foi possível gerar o Pix agora. Tente novamente em instantes.");
+    }
+    const b64 = typeof tx.qr_code_base64 === "string" && /^[A-Za-z0-9+/=]+$/.test(tx.qr_code_base64) ? tx.qr_code_base64 : null;
+    const ticket = typeof tx.ticket_url === "string" && /^https:\/\//.test(tx.ticket_url) ? tx.ticket_url : null;
+    const exp = res.date_of_expiration && !Number.isNaN(Date.parse(res.date_of_expiration)) ? new Date(res.date_of_expiration).toISOString() : new Date(expiresAt).toISOString();
+    db.prepare(
+      `UPDATE orders SET status='AWAITING_PAYMENT', pix_payment_id=?, pix_qr_code=?, pix_qr_base64=?, pix_ticket_url=?,
+       pix_expires_at=?, pix_attempt=?, payer_email=?, provider_payment_id=?, last_error=NULL, last_checked_at=0,
+       manual_status=0, updated_at=? WHERE id=?`,
+    ).run(String(res.id), tx.qr_code.slice(0, 2000), b64, ticket, exp, attempt, email, String(res.id), iso(), o.id);
+    log.log?.(`[pedido ${orderNumber(o.id)}] Pix gerado (pagamento ${res.id})`);
+    o = q.byId.get(o.id);
+    return pixView(o);
+  }
+
+  const pixView = (o) =>
+    activePix(o) ? { qrCode: o.pix_qr_code, hasImage: !!o.pix_qr_base64, expiresAt: o.pix_expires_at } : null;
+
+  /** Imagem PNG do QR code do Pix ativo (servida por rota própria, para não pesar a consulta de status). */
+  function pixImage(publicId) {
+    const o = q.byPublic.get(publicId);
+    if (!o || !activePix(o) || !o.pix_qr_base64) return null;
+    return Buffer.from(o.pix_qr_base64, "base64");
+  }
+
   const summary = (o) => ({
     publicId: o.public_id,
     status: o.status,
@@ -204,6 +294,22 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
       throw e;
     }
     return summary(await openCheckout(row));
+  }
+
+  /** Link da página do Mercado Pago (cartão/boleto). Reaproveita o atual ou cria outro se expirou. */
+  async function cardCheckout(publicId) {
+    const o = q.byPublic.get(publicId);
+    if (!o) throw new HttpError(404, "not_found", "Pedido não encontrado.");
+    if (o.status === "PAID") throw new HttpError(409, "already_paid", "Este pedido já foi pago.");
+    const valid = o.provider_pay_url && o.checkout_expires_at && Date.parse(o.checkout_expires_at) > now() + 60_000;
+    if (o.status === "AWAITING_PAYMENT" && valid) return { payUrl: o.provider_pay_url };
+    if (o.status !== "AWAITING_PAYMENT" && !RETRYABLE.has(o.status))
+      throw new HttpError(409, "not_retryable", "Este pedido não pode receber um novo pagamento agora.");
+    const { lines, total } = priceCart(
+      JSON.parse(o.items_json).map((i) => ({ productId: i.productId, size: i.size, quantity: i.quantity, color: i.color ?? undefined })),
+    );
+    db.prepare("UPDATE orders SET items_json=?, total_cents=?, updated_at=? WHERE id=?").run(JSON.stringify(lines), total, iso(), o.id);
+    return { payUrl: summary(await openCheckout(q.byId.get(o.id))).payUrl };
   }
 
   async function retryOrder(publicId) {
@@ -345,6 +451,7 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
       canRetry: RETRYABLE.has(o.status),
       whatsappUrl: whatsappUrl(o),
       whatsappConfigured: /^55\d{10,11}$/.test(config.whatsappNumber),
+      pix: pixView(o),
       verification,
     };
   }
@@ -446,5 +553,5 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     return { ok: true, number: orderNumber(id) };
   }
 
-  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, adminSetStatus, adminDeleteOrder, reconcilePending, priceCart };
+  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, adminSetStatus, adminDeleteOrder, reconcilePending, priceCart, createPix, pixImage, cardCheckout };
 }

@@ -41,7 +41,7 @@ export function verifySignature({ signature, requestId, dataId, secret }) {
 }
 
 export function createMercadoPagoClient({ accessToken, baseUrl, fetchImpl = fetch, timeoutMs = 15000 }) {
-  async function request(method, path, body) {
+  async function request(method, path, body, extraHeaders = {}) {
     let res;
     try {
       res = await fetchImpl(`${baseUrl}${path}`, {
@@ -50,6 +50,7 @@ export function createMercadoPagoClient({ accessToken, baseUrl, fetchImpl = fetc
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
           Accept: "application/json",
+          ...extraHeaders,
         },
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(timeoutMs),
@@ -77,6 +78,9 @@ export function createMercadoPagoClient({ accessToken, baseUrl, fetchImpl = fetc
   return {
     configured: Boolean(accessToken),
     createPreference: (payload) => request("POST", "/checkout/preferences", payload),
+    /** Cria um pagamento pela API de Payments (usado para o Pix dentro do site). Idempotency key obrigatória. */
+    createPayment: (payload, idempotencyKey) =>
+      request("POST", "/v1/payments", payload, { "X-Idempotency-Key": idempotencyKey }),
     getPayment: (id) => request("GET", `/v1/payments/${encodeURIComponent(id)}`),
     searchPayments: (externalReference) =>
       request(

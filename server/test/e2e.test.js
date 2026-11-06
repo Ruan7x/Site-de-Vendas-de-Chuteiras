@@ -9,6 +9,7 @@ import { openDb } from "../db.js";
 import { createApp, withProductPreview } from "../app.js";
 import { createMercadoPagoClient, verifySignature } from "../mercadopago.js";
 import { loadConfig } from "../config.js";
+import { derivePaymentState } from "../orders.js";
 
 const TOKEN = "APP_USR-test-token";
 const SECRET = "webhook-secret-xyz";
@@ -16,7 +17,7 @@ const quiet = { log() {}, warn() {}, error() {} };
 
 /** Mercado Pago falso: guarda o "estado real" dos pagamentos e das preferências. */
 async function startMock() {
-  const state = { preferences: 0, payments: {}, failCreate: false, lastBody: null, down: false };
+  const state = { preferences: 0, payments: {}, failCreate: false, lastBody: null, down: false, pixCreated: 0, pixKeys: {}, lastPixBody: null, failPix: false };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -39,6 +40,31 @@ async function startMock() {
           init_point: `${origin}/pay?pref=${n}`,
           sandbox_init_point: `${origin}/sandbox-pay?pref=${n}`,
         });
+      }
+      if (req.method === "POST" && url.pathname === "/v1/payments") {
+        const idem = req.headers["x-idempotency-key"];
+        if (!idem) return send(400, { message: "X-Idempotency-Key required" });
+        if (state.failPix) return send(400, { message: "Collector user without key enabled for QR render", error: "bad_request" });
+        if (state.pixKeys[idem]) return send(201, state.payments[state.pixKeys[idem]]); // mesma chave: mesmo pagamento
+        const b = JSON.parse(body);
+        state.lastPixBody = b;
+        state.pixCreated++;
+        const id = String(900000 + state.pixCreated);
+        state.pixKeys[idem] = id;
+        state.payments[id] = {
+          id: Number(id), status: "pending", status_detail: "pending_waiting_transfer", payment_method_id: "pix",
+          transaction_amount: b.transaction_amount, currency_id: "BRL", external_reference: b.external_reference,
+          date_of_expiration: b.date_of_expiration, date_created: new Date(Date.now() + state.pixCreated).toISOString(),
+          point_of_interaction: {
+            type: "PIX",
+            transaction_data: {
+              qr_code: `00020126580014br.gov.bcb.pix-${id}`,
+              qr_code_base64: Buffer.from(`fake-png-${id}`).toString("base64"),
+              ticket_url: `https://www.mercadopago.com.br/payments/${id}/ticket`,
+            },
+          },
+        };
+        return send(201, state.payments[id]);
       }
       let m = url.pathname.match(/^\/v1\/payments\/(\d+)$/);
       if (m) return state.payments[m[1]] ? send(200, state.payments[m[1]]) : send(404, { message: "Payment not found" });
@@ -751,4 +777,93 @@ test("admin exclui pedido; webhook repetido do mesmo pagamento continua ignorado
   } finally {
     t.close();
   }
+});
+
+test("Pix dentro do site: gera QR, reaproveita, confirma o pagamento e libera o WhatsApp", async () => {
+  const t = await setup();
+  try {
+    const o = await newOrder(t);
+    const path = `/api/orders/${o.publicId}/pix`;
+    // e-mail é obrigatório e validado
+    assert.equal((await t.api("POST", path, { email: "nao-e-email" })).status, 400);
+    const r = await t.api("POST", path, { email: "Cliente@Exemplo.com " });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.match(r.json.pix.qrCode, /^00020126580014br\.gov\.bcb\.pix-9/);
+    assert.equal(r.json.pix.hasImage, true);
+    const sent = t.mock.state.lastPixBody;
+    assert.equal(sent.payment_method_id, "pix");
+    assert.equal(sent.transaction_amount, 1799.8); // valor do servidor
+    assert.equal(sent.payer.email, "cliente@exemplo.com");
+    assert.equal(sent.external_reference, t.db.prepare("SELECT reference_id r FROM orders WHERE public_id=?").get(o.publicId).r);
+    assert.match(sent.date_of_expiration, /\+00:00$/);
+    // clicar de novo / recarregar: o mesmo Pix (não cria outro pagamento)
+    const again = await t.api("POST", path, { email: "outro@exemplo.com" });
+    assert.equal(again.json.pix.qrCode, r.json.pix.qrCode);
+    assert.equal(t.mock.state.pixCreated, 1);
+    // a página do pedido mostra o Pix e a imagem do QR
+    let v = await view(t, o.publicId);
+    assert.equal(v.status, "AWAITING_PAYMENT");
+    assert.equal(v.pix.qrCode, r.json.pix.qrCode);
+    const png = await fetch(`${t.base}/api/orders/${o.publicId}/pix.png`);
+    assert.equal(png.status, 200);
+    assert.equal(png.headers.get("content-type"), "image/png");
+    assert.equal(Buffer.from(await png.arrayBuffer()).toString(), "fake-png-900001");
+    // cliente paga no app do banco: a consulta confirma e libera o WhatsApp
+    t.mock.state.payments["900001"].status = "approved";
+    t.mock.state.payments["900001"].status_detail = "accredited";
+    t.db.prepare("UPDATE orders SET last_checked_at=0").run();
+    v = await view(t, o.publicId);
+    assert.equal(v.status, "PAID");
+    assert.ok(v.whatsappUrl);
+    assert.equal(v.pix, null); // pago: não mostra mais o QR
+    assert.equal((await fetch(`${t.base}/api/orders/${o.publicId}/pix.png`)).status, 404);
+    // pedido pago não gera outro Pix
+    assert.equal((await t.api("POST", path, { email: "c@exemplo.com" })).status, 409);
+  } finally {
+    t.close();
+  }
+});
+
+test("Pix: Pix expirado volta como EXPIRED e pode ser gerado de novo; falha do Mercado Pago dá erro claro", async () => {
+  const t = await setup();
+  try {
+    const o = await newOrder(t);
+    const path = `/api/orders/${o.publicId}/pix`;
+    const first = await t.api("POST", path, { email: "c@exemplo.com" });
+    // o Pix venceu sem pagamento
+    Object.assign(t.mock.state.payments["900001"], { status: "cancelled", status_detail: "expired" });
+    t.db.prepare("UPDATE orders SET last_checked_at=0, pix_expires_at=?").run(new Date(Date.now() - 1000).toISOString());
+    const v = await view(t, o.publicId);
+    assert.equal(v.status, "EXPIRED");
+    assert.equal(v.pix, null);
+    // gera um novo Pix (nova tentativa, nova chave de idempotência)
+    const second = await t.api("POST", path, { email: "c@exemplo.com" });
+    assert.equal(second.status, 200, JSON.stringify(second.json));
+    assert.notEqual(second.json.pix.qrCode, first.json.pix.qrCode);
+    assert.equal(t.mock.state.pixCreated, 2);
+    assert.equal((await view(t, o.publicId)).status, "AWAITING_PAYMENT");
+    // cartão/boleto: devolve um link válido da página do Mercado Pago
+    const card = await t.api("POST", `/api/orders/${o.publicId}/card`);
+    assert.equal(card.status, 200);
+    assert.match(card.json.payUrl, /\/pay\?pref=/);
+    // Mercado Pago recusa gerar (ex.: conta sem chave Pix)
+    const o2 = await newOrder(t, [{ productId: "stealth-tf", size: 40, quantity: 1 }]);
+    t.mock.state.failPix = true;
+    const bad = await t.api("POST", `/api/orders/${o2.publicId}/pix`, { email: "c@exemplo.com" });
+    assert.equal(bad.status, 422);
+    assert.match(bad.json.message, /não aceitou gerar o Pix/);
+  } finally {
+    t.close();
+  }
+});
+
+test("estado do pedido: Pix válido vale mais que tentativa anterior recusada/vencida", () => {
+  const base = { currency_id: "BRL", transaction_amount: 100 };
+  const old = { ...base, id: 1, status: "rejected", date_created: "2026-01-01T10:00:00Z" };
+  const exp = { ...base, id: 2, status: "cancelled", status_detail: "expired", date_created: "2026-01-01T12:00:00Z" };
+  const pix = { ...base, id: 3, status: "pending", date_created: "2026-01-01T11:00:00Z" };
+  assert.equal(derivePaymentState([old, exp, pix], 10000).status, "AWAITING_PAYMENT");
+  assert.equal(derivePaymentState([old, exp], 10000).status, "EXPIRED"); // sem nada em andamento: vale o mais recente
+  assert.equal(derivePaymentState([pix, { ...base, id: 4, status: "in_process" }], 10000).status, "IN_ANALYSIS");
+  assert.equal(derivePaymentState([exp, { ...base, id: 5, status: "approved" }], 10000).status, "PAID");
 });

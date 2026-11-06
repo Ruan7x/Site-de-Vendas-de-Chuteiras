@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/sheet";
 import { useCart } from "@/lib/cart";
 import { startCheckout } from "@/lib/checkout";
-import { openPayTab } from "@/lib/pay-tab";
 import { categories, formatPrice } from "@/lib/products";
 
 function CartSheet() {
@@ -25,25 +24,14 @@ function CartSheet() {
   const checkout = async () => {
     if (paying || detailed.length === 0) return;
     setPaying(true);
-    const tab = openPayTab();
     try {
+      // Cria o pedido e abre a página dele, onde o cliente escolhe Pix (no próprio site) ou cartão/boleto.
       const res = await startCheckout(detailed.map((l) => ({ id: l.product.id, size: l.size, qty: l.qty, color: l.color })));
-      if (res.payUrl && tab.go(res.payUrl)) {
-        // pagamento numa aba nova; esta aba acompanha o pedido e abre o WhatsApp quando for pago
-        setOpen(false);
-        setPaying(false);
-        navigate(`/pedido/${res.publicId}`);
-        return;
-      }
-      tab.close();
-      if (res.payUrl) {
-        window.location.assign(res.payUrl); // aba bloqueada pelo navegador: paga nesta mesma aba
-        return;
-      }
       setOpen(false);
+      setPaying(false);
       navigate(`/pedido/${res.publicId}`);
+      return;
     } catch (e) {
-      tab.close();
       toast.error(e instanceof Error ? e.message : "Não foi possível iniciar o pagamento.");
     }
     setPaying(false);
@@ -121,7 +109,7 @@ function CartSheet() {
           >
             {paying ? (
               <>
-                <Loader2 className="animate-spin" /> Redirecionando…
+                <Loader2 className="animate-spin" /> Criando pedido…
               </>
             ) : (
               "Finalizar compra"

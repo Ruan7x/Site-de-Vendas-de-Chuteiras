@@ -98,6 +98,13 @@ function migrate(db) {
   const fbCols = columns(db, "feedback");
   if (!fbCols.includes("model")) db.exec("ALTER TABLE feedback ADD COLUMN model TEXT");
   if (!fbCols.includes("images")) db.exec("ALTER TABLE feedback ADD COLUMN images TEXT NOT NULL DEFAULT '[]'");
+  // Pix dentro do site (QR code guardado para a página do pedido não gerar outro a cada visita)
+  const oc = columns(db, "orders");
+  for (const [col, type] of [
+    ["pix_payment_id", "TEXT"], ["pix_qr_code", "TEXT"], ["pix_qr_base64", "TEXT"], ["pix_ticket_url", "TEXT"],
+    ["pix_expires_at", "TEXT"], ["pix_attempt", "INTEGER NOT NULL DEFAULT 0"], ["payer_email", "TEXT"],
+  ])
+    if (!oc.includes(col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${type}`);
   if (!columns(db, "products").includes("colors"))
     db.exec("ALTER TABLE products ADD COLUMN colors TEXT NOT NULL DEFAULT '[]'");
   if (!columns(db, "orders").includes("manual_status"))
