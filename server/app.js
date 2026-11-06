@@ -3,7 +3,7 @@ import path from "node:path";
 import express from "express";
 import { z, ZodError } from "zod";
 import { productToApi } from "./db.js";
-import { HttpError, createOrdersService } from "./orders.js";
+import { ADMIN_STATUSES, HttpError, createOrdersService } from "./orders.js";
 import { createMercadoPagoClient } from "./mercadopago.js";
 import { IMAGE_NAME_RE, decodeDataUrlImage, saveDataUrlImage, writeImage } from "./uploads.js";
 import {
@@ -200,6 +200,12 @@ export function createApp({ db, config, mp, log = console }) {
     const r = db.prepare("DELETE FROM products WHERE id=?").run(req.params.id);
     if (!r.changes) throw new HttpError(404, "not_found", "Produto não encontrado.");
     res.json({ ok: true });
+  });
+  admin.patch("/orders/:id/status", (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(404, "order_not_found", "Pedido não encontrado.");
+    const { status } = z.object({ status: z.enum(ADMIN_STATUSES) }).parse(req.body);
+    res.json({ order: orders.adminSetStatus(id, status) });
   });
   admin.get("/orders", async (req, res) => {
     // confere os pendentes recentes antes de listar (limitado para a tela não demorar)

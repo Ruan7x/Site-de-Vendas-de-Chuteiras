@@ -70,6 +70,9 @@ export function derivePaymentState(payments, totalCents) {
   }
 }
 
+/** Status que o admin pode escolher manualmente. */
+export const ADMIN_STATUSES = ["AWAITING_PAYMENT", "PAID", "CANCELED", "REFUNDED", "EXPIRED", "DECLINED"];
+
 export function createOrdersService({ db, config, mp, log = console, now = () => Date.now() }) {
   const q = {
     byPublic: db.prepare("SELECT * FROM orders WHERE public_id=?"),
@@ -209,7 +212,7 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     if (cur.status !== status) log.log?.(`[pedido ${orderNumber(cur.id)}] ${cur.status} → ${status}`);
     db.prepare(
       `UPDATE orders SET status=?, provider_payment_id=COALESCE(?,provider_payment_id),
-       paid_at=CASE WHEN ?='PAID' THEN COALESCE(?,?) ELSE paid_at END, last_error=?, updated_at=? WHERE id=?`,
+       paid_at=CASE WHEN ?='PAID' THEN COALESCE(?,?) ELSE paid_at END, last_error=?, manual_status=0, updated_at=? WHERE id=?`,
     ).run(status, extra.paymentId ? String(extra.paymentId) : null, status, extra.paidAt ?? null, iso(), extra.reason ?? null, iso(), order.id);
     return `status:${status}`;
   }
@@ -381,10 +384,32 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     return checked;
   }
 
-  const listOrders = () =>
-    db.prepare("SELECT * FROM orders ORDER BY id DESC LIMIT 200").all().map((o) => ({
-      ...toView(o), publicId: undefined, paymentId: o.provider_payment_id, lastError: o.last_error,
-    }));
+  const adminView = (o) => ({
+    ...toView(o), publicId: undefined, id: o.id, paymentId: o.provider_payment_id, lastError: o.last_error,
+    manualStatus: o.manual_status === 1,
+  });
+  const listOrders = () => db.prepare("SELECT * FROM orders ORDER BY id DESC LIMIT 200").all().map(adminView);
 
-  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, reconcilePending, priceCart };
+  /**
+   * Alteração manual do status pelo admin (ex.: o cliente comprou pelo site e pagou em dinheiro).
+   * Fica registrada em payment_events e marcada no pedido; "Pago" libera o WhatsApp na página do pedido.
+   */
+  function adminSetStatus(id, status) {
+    if (!ADMIN_STATUSES.includes(status)) throw new HttpError(400, "invalid_status", "Status inválido.");
+    const cur = q.byId.get(id);
+    if (!cur) throw new HttpError(404, "order_not_found", "Pedido não encontrado.");
+    if (cur.status !== status) {
+      db.prepare(
+        `UPDATE orders SET status=?, manual_status=1, last_error=NULL, updated_at=?,
+         paid_at=CASE WHEN ?='PAID' THEN COALESCE(paid_at,?) ELSE paid_at END WHERE id=?`,
+      ).run(status, iso(), status, iso(), id);
+      db.prepare("INSERT INTO payment_events (event_key,order_id,source,outcome,received_at) VALUES (?,?,?,?,?)").run(
+        `admin:${id}:${now()}:${newPublicId()}`, id, "admin", `${cur.status}->${status}`, iso(),
+      );
+      log.log?.(`[pedido ${orderNumber(id)}] ${cur.status} → ${status} (alterado no admin)`);
+    }
+    return adminView(q.byId.get(id));
+  }
+
+  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, adminSetStatus, reconcilePending, priceCart };
 }

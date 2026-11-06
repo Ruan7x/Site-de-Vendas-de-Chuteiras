@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS orders (
   last_error          TEXT,
   last_checked_at     INTEGER NOT NULL DEFAULT 0,
   paid_at             TEXT,
+  manual_status       INTEGER NOT NULL DEFAULT 0, -- 1 = status alterado pelo admin (ex.: pagamento em dinheiro)
   created_at          TEXT NOT NULL,
   updated_at          TEXT NOT NULL
 );
@@ -96,6 +97,8 @@ function migrate(db) {
   const fbCols = columns(db, "feedback");
   if (!fbCols.includes("model")) db.exec("ALTER TABLE feedback ADD COLUMN model TEXT");
   if (!fbCols.includes("images")) db.exec("ALTER TABLE feedback ADD COLUMN images TEXT NOT NULL DEFAULT '[]'");
+  if (!columns(db, "orders").includes("manual_status"))
+    db.exec("ALTER TABLE orders ADD COLUMN manual_status INTEGER NOT NULL DEFAULT 0");
 }
 
 function seedProductsOnce(db) {

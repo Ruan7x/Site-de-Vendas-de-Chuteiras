@@ -6,12 +6,7 @@ export function SiteFooter() {
     <footer className="border-t border-border bg-surface">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 md:grid-cols-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="skew-tag bg-primary px-2 py-0.5 font-display text-xl text-primary-foreground">
-              TN
-            </span>
-            <span className="font-display text-xl tracking-wider">Sports</span>
-          </div>
+          <img src="/logo-192.png" alt="TN Sports" width={192} height={192} loading="lazy" className="size-20" />
           <p className="mt-4 max-w-xs text-sm text-muted-foreground">
             Chuteiras de performance para campo e society. Feito para quem joga pra
             valer.
@@ -34,7 +29,6 @@ export function SiteFooter() {
         <div>
           <h3 className="eyebrow text-primary">Ajuda</h3>
           <ul className="mt-4 space-y-2 text-sm text-muted-foreground">
-            <li>Guia de tamanhos</li>
             <li>Trocas e devoluções</li>
             <li>Prazos de entrega</li>
             <li>Fale com a gente</li>
@@ -44,10 +38,8 @@ export function SiteFooter() {
         <div>
           <h3 className="eyebrow text-primary">Entrega</h3>
           <ul className="mt-4 space-y-2 text-sm text-muted-foreground">
-            <li>Frete grátis acima de R$ 499</li>
-            <li>Até 12x sem juros</li>
             <li>30 dias para troca</li>
-            <li>Envio para todo o Brasil</li>
+            <li>Envio para Cuiabá e região próxima</li>
           </ul>
         </div>
       </div>

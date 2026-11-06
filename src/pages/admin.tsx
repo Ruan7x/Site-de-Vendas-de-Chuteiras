@@ -337,9 +337,83 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 type AdminOrder = {
-  number: string; status: string; total: number; createdAt: string; paidAt: string | null;
+  id: number; number: string; status: string; total: number; createdAt: string; paidAt: string | null;
   items: { name: string; size: number; quantity: number }[]; paymentId: string | null; lastError: string | null;
+  manualStatus: boolean;
 };
+
+// Status que podem ser escolhidos à mão (ex.: cliente pagou em dinheiro na entrega).
+const EDITABLE_STATUSES = ["AWAITING_PAYMENT", "PAID", "CANCELED", "REFUNDED", "EXPIRED", "DECLINED"];
+
+function OrderStatusCell({ order, onChanged }: { order: AdminOrder; onChanged: (o: AdminOrder) => void }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const options = EDITABLE_STATUSES.includes(order.status) ? EDITABLE_STATUSES : [order.status, ...EDITABLE_STATUSES];
+  const tone = order.status === "PAID" ? "text-primary" : order.status === "VERIFICATION_ERROR" ? "text-destructive" : "";
+
+  const save = async () => {
+    if (!pending) return;
+    setSaving(true);
+    try {
+      const r = await api<{ order: AdminOrder }>(`/api/admin/orders/${order.id}/status`, {
+        method: "PATCH",
+        json: { status: pending },
+      });
+      onChanged(r.order);
+      toast.success("Status atualizado", { description: `${order.number}: ${STATUS_LABEL[pending] ?? pending}` });
+      setPending(null);
+    } catch (e) {
+      toast.error("Não foi possível alterar", { description: e instanceof Error ? e.message : undefined });
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      <select
+        aria-label={`Status do pedido ${order.number}`}
+        value={order.status}
+        disabled={saving}
+        onChange={(e) => e.target.value !== order.status && setPending(e.target.value)}
+        className={`h-9 w-full min-w-44 border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${tone}`}
+      >
+        {options.map((s) => (
+          <option key={s} value={s} disabled={!EDITABLE_STATUSES.includes(s)}>
+            {STATUS_LABEL[s] ?? s}
+          </option>
+        ))}
+      </select>
+      {order.manualStatus && <span className="text-[11px] text-muted-foreground">Alterado manualmente</span>}
+
+      <AlertDialog open={pending !== null} onOpenChange={(open) => !open && !saving && setPending(null)}>
+        <AlertDialogContent className="bg-surface text-surface-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-display text-2xl">Alterar status de {order.number}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              De <strong>{STATUS_LABEL[order.status] ?? order.status}</strong> para{" "}
+              <strong>{pending ? (STATUS_LABEL[pending] ?? pending) : ""}</strong>.
+              {pending === "PAID" &&
+                " Use quando o cliente pagar fora do site (ex.: em dinheiro). A página do pedido passa a mostrar o botão do WhatsApp."}
+              {pending === "REFUNDED" && " Isto não devolve o dinheiro no Mercado Pago: faça o reembolso pelo painel de lá."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              onClick={(e) => {
+                e.preventDefault();
+                void save();
+              }}
+            >
+              {saving ? "Salvando…" : "Confirmar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
 
 function AdminOrders() {
   const [rows, setRows] = useState<AdminOrder[] | null>(null);
@@ -361,14 +435,14 @@ function AdminOrders() {
         </TableHeader>
         <TableBody>
           {rows.map((o) => (
-            <TableRow key={o.number}>
+            <TableRow key={o.id}>
               <TableCell className="font-display">{o.number}</TableCell>
               <TableCell className="text-xs text-muted-foreground">
                 {o.items.map((i) => `${i.quantity}x ${i.name} (${i.size})`).join(", ")}
               </TableCell>
               <TableCell>{formatPrice(o.total)}</TableCell>
-              <TableCell className={o.status === "PAID" ? "text-primary" : o.status === "VERIFICATION_ERROR" ? "text-destructive" : ""}>
-                {STATUS_LABEL[o.status] ?? o.status}
+              <TableCell>
+                <OrderStatusCell order={o} onChanged={(n) => setRows((prev) => prev?.map((x) => (x.id === n.id ? n : x)) ?? prev)} />
               </TableCell>
               <TableCell className="text-xs text-muted-foreground">{new Date(o.createdAt).toLocaleString("pt-BR")}</TableCell>
             </TableRow>

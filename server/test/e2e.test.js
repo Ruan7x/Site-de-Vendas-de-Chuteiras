@@ -625,3 +625,41 @@ test("página do produto: prévia do link (Open Graph) com foto, nome e preço d
   const ext = withProductPreview(html, { id: "x", name: "X", colorway: "Y", category: "Society", price: 1, image: "https://cdn.example.com/a.jpg" }, "https://loja.example.com");
   assert.match(ext, /content="https:\/\/cdn\.example\.com\/a\.jpg"/);
 });
+
+test("admin altera o status do pedido à mão (ex.: pagamento em dinheiro)", async () => {
+  const t = await setup();
+  try {
+    const o = await newOrder(t);
+    const id = t.db.prepare("SELECT id FROM orders WHERE public_id=?").get(o.publicId).id;
+    const path = `/api/admin/orders/${id}/status`;
+    // sem login: bloqueado
+    assert.equal((await t.api("PATCH", path, JSON.stringify({ status: "PAID" }), {})).status, 401);
+    const cookie = await adminCookie(t);
+    // status inválido
+    assert.equal((await t.api("PATCH", path, JSON.stringify({ status: "QUALQUER" }), cookie)).status, 400);
+    assert.equal((await t.api("PATCH", "/api/admin/orders/999999/status", JSON.stringify({ status: "PAID" }), cookie)).status, 404);
+    // marca como pago
+    const r = await t.api("PATCH", path, JSON.stringify({ status: "PAID" }), cookie);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.order.status, "PAID");
+    assert.equal(r.json.order.manualStatus, true);
+    const row = t.db.prepare("SELECT status, paid_at, manual_status FROM orders WHERE id=?").get(id);
+    assert.equal(row.status, "PAID");
+    assert.ok(row.paid_at);
+    assert.equal(row.manual_status, 1);
+    assert.equal(t.db.prepare("SELECT outcome FROM payment_events WHERE source='admin' AND order_id=?").get(id).outcome, "AWAITING_PAYMENT->PAID");
+    // a página do pedido libera o WhatsApp
+    const v = await t.api("GET", `/api/orders/${o.publicId}`);
+    assert.equal(v.json.status, "PAID");
+    assert.ok(v.json.whatsappUrl);
+    // a conferência automática não mexe em pedido marcado à mão como pago
+    t.db.prepare("UPDATE orders SET last_checked_at=0").run();
+    await t.app.locals.orders.reconcilePending();
+    assert.equal(t.db.prepare("SELECT status FROM orders WHERE id=?").get(id).status, "PAID");
+    // e pode voltar atrás (ex.: marcado por engano)
+    const back = await t.api("PATCH", path, JSON.stringify({ status: "CANCELED" }), cookie);
+    assert.equal(back.json.order.status, "CANCELED");
+  } finally {
+    t.close();
+  }
+});
