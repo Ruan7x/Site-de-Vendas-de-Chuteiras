@@ -430,5 +430,21 @@ export function createOrdersService({ db, config, mp, log = console, now = () =>
     return adminView(q.byId.get(id));
   }
 
-  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, adminSetStatus, reconcilePending, priceCart };
+  /**
+   * Exclui o pedido do site (ex.: pedidos de teste). Não mexe no Mercado Pago: um pagamento feito
+   * continua lá. Os eventos de pagamento ficam guardados sem o vínculo, para que um aviso repetido do
+   * Mercado Pago sobre o mesmo pagamento continue sendo ignorado.
+   */
+  function adminDeleteOrder(id) {
+    const cur = q.byId.get(id);
+    if (!cur) throw new HttpError(404, "order_not_found", "Pedido não encontrado.");
+    db.transaction(() => {
+      db.prepare("UPDATE payment_events SET order_id=NULL WHERE order_id=?").run(id);
+      db.prepare("DELETE FROM orders WHERE id=?").run(id);
+    })();
+    log.log?.(`[pedido ${orderNumber(id)}] excluído no admin (status era ${cur.status})`);
+    return { ok: true, number: orderNumber(id) };
+  }
+
+  return { createOrder, retryOrder, handleWebhook, getPublicView, listOrders, adminSetStatus, adminDeleteOrder, reconcilePending, priceCart };
 }

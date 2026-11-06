@@ -730,3 +730,25 @@ test("cores: admin cadastra cores com foto própria; cliente escolhe a cor e ela
     t.close();
   }
 });
+
+test("admin exclui pedido; webhook repetido do mesmo pagamento continua ignorado", async () => {
+  const t = await setup();
+  try {
+    const o = await newOrder(t);
+    const id = t.db.prepare("SELECT id FROM orders WHERE public_id=?").get(o.publicId).id;
+    assert.equal((await t.api("DELETE", `/api/admin/orders/${id}`)).status, 401); // sem login
+    const cookie = await adminCookie(t);
+    await t.api("PATCH", `/api/admin/orders/${id}/status`, { status: "PAID" }, cookie); // gera um evento ligado ao pedido
+    const del = await t.api("DELETE", `/api/admin/orders/${id}`, undefined, cookie);
+    assert.equal(del.status, 200, JSON.stringify(del.json));
+    assert.equal(del.json.number, "TN-00001");
+    assert.equal(t.db.prepare("SELECT COUNT(*) n FROM orders").get().n, 0);
+    assert.equal(t.db.prepare("SELECT COUNT(*) n FROM payment_events WHERE order_id IS NULL AND source='admin'").get().n, 1);
+    assert.equal((await t.api("GET", `/api/orders/${o.publicId}`)).status, 404);
+    assert.equal((await t.api("DELETE", `/api/admin/orders/${id}`, undefined, cookie)).status, 404);
+    const list = await t.api("GET", "/api/admin/orders", undefined, cookie);
+    assert.deepEqual(list.json.orders, []);
+  } finally {
+    t.close();
+  }
+});

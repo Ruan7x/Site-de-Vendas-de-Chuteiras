@@ -234,6 +234,11 @@ export function createApp({ db, config, mp, log = console }) {
     const { status } = z.object({ status: z.enum(ADMIN_STATUSES) }).parse(req.body);
     res.json({ order: orders.adminSetStatus(id, status) });
   });
+  admin.delete("/orders/:id", (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(404, "order_not_found", "Pedido não encontrado.");
+    res.json(orders.adminDeleteOrder(id));
+  });
   admin.get("/orders", async (req, res) => {
     // confere os pendentes recentes antes de listar (limitado para a tela não demorar)
     await orders.reconcilePending({ minIntervalMs: 10_000, limit: 10 }).catch(() => {});

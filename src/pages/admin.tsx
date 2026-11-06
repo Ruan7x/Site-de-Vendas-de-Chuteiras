@@ -496,6 +496,67 @@ function OrderStatusCell({ order, onChanged }: { order: AdminOrder; onChanged: (
   );
 }
 
+function DeleteOrderButton({ order, onDeleted }: { order: AdminOrder; onDeleted: (id: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const paid = order.status === "PAID";
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/admin/orders/${order.id}`, { method: "DELETE" });
+      onDeleted(order.id);
+      toast.success("Pedido excluído", { description: order.number });
+      setOpen(false);
+    } catch (e) {
+      toast.error("Não foi possível excluir", { description: e instanceof Error ? e.message : undefined });
+    }
+    setBusy(false);
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={(v) => !busy && setOpen(v)}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={`Excluir pedido ${order.number}`}
+        className="text-muted-foreground hover:text-destructive"
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 />
+      </Button>
+      <AlertDialogContent className="bg-surface text-surface-foreground">
+        <AlertDialogHeader>
+          <AlertDialogTitle className="font-display text-2xl">Excluir {order.number}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            O pedido some do painel e a página dele deixa de abrir para o cliente. Isso não pode ser desfeito.
+            {paid && (
+              <>
+                {" "}
+                <strong className="text-foreground">Este pedido está pago:</strong> excluir aqui não devolve o dinheiro.
+                Se precisar reembolsar, faça pelo painel do Mercado Pago.
+              </>
+            )}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancelar</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={busy}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={(e) => {
+              e.preventDefault();
+              void confirm();
+            }}
+          >
+            {busy ? "Excluindo…" : "Excluir pedido"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function AdminOrders() {
   const [rows, setRows] = useState<AdminOrder[] | null>(null);
   useEffect(() => {
@@ -512,6 +573,9 @@ function AdminOrders() {
             <TableHead>Total</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Criado em</TableHead>
+            <TableHead className="w-12 text-right">
+              <span className="sr-only">Ações</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -526,11 +590,14 @@ function AdminOrders() {
                 <OrderStatusCell order={o} onChanged={(n) => setRows((prev) => prev?.map((x) => (x.id === n.id ? n : x)) ?? prev)} />
               </TableCell>
               <TableCell className="text-xs text-muted-foreground">{new Date(o.createdAt).toLocaleString("pt-BR")}</TableCell>
+              <TableCell className="text-right">
+                <DeleteOrderButton order={o} onDeleted={(id) => setRows((prev) => prev?.filter((x) => x.id !== id) ?? prev)} />
+              </TableCell>
             </TableRow>
           ))}
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">Nenhum pedido ainda.</TableCell>
+              <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">Nenhum pedido ainda.</TableCell>
             </TableRow>
           )}
         </TableBody>
